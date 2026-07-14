@@ -547,7 +547,7 @@ class TranscriberGUI:
         
         # Files list
         lb = self._card(pg)
-        lb.grid(row=2, column=0, sticky="nswe", padx=(12, 4), pady=(0, 12))
+        lb.grid(row=2, column=0, sticky="nswe", padx=(12, 4), pady=(0, 6))
         self._card_hdr(lb, "FILES")
         li = Frame(lb, bg=t["surface"])
         li.pack(fill="both", expand=True, padx=4, pady=4)
@@ -556,6 +556,14 @@ class TranscriberGUI:
         self.hist_list.pack(side="left", fill="both", expand=True)
         self.hist_list.bind("<<ListboxSelect>>", self._hist_select)
         Scrollbar(li, command=self.hist_list.yview).pack(side="right", fill="y")
+        
+        # Export buttons under files
+        ef = Frame(lb, bg=t["surface"])
+        ef.pack(fill="x", padx=4, pady=(0, 4))
+        self._btn(ef, text="DOCX", command=self._hist_export_docx, padx=8).pack(side="left")
+        self._btn(ef, text="PDF", command=self._hist_export_pdf, padx=8).pack(side="left", padx=(4, 0))
+        self.hist_export_status = StringVar(value="")
+        Label(ef, textvariable=self.hist_export_status, font=("Segoe UI", 8), bg=t["surface"], fg=t["ok"]).pack(side="left", padx=(8, 0))
         
         # Preview
         pb = self._card(pg)
@@ -576,14 +584,6 @@ class TranscriberGUI:
         pm.add_command(label="Copy All", command=self._copy_all_hist)
         self.hist_preview.bind("<Button-3>", lambda e: pm.tk_popup(e.x_root, e.y_root))
         Scrollbar(pi, command=self.hist_preview.yview).pack(side="right", fill="y")
-        
-        # Export buttons for history
-        ef = Frame(pg, bg=t["bg"])
-        ef.grid(row=3, column=1, sticky="we", padx=(4, 12), pady=(0, 12))
-        self._btn(ef, text="Export as DOCX", command=self._hist_export_docx, padx=10).pack(side="left")
-        self._btn(ef, text="Export as PDF", command=self._hist_export_pdf, padx=10).pack(side="left", padx=(6, 0))
-        self.hist_export_status = StringVar(value="")
-        Label(ef, textvariable=self.hist_export_status, font=("Segoe UI", 9), bg=t["bg"], fg=t["ok"]).pack(side="left", padx=(10, 0))
         
         return pg
     
