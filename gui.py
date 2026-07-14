@@ -442,6 +442,62 @@ class TranscriberGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Export failed: {e}")
     
+    def _hist_export_docx(self):
+        from tkinter import filedialog
+        text = self.hist_preview.get("1.0", END).strip()
+        if not text:
+            messagebox.showwarning("Warning", "No content to export")
+            return
+        path = filedialog.asksaveasfilename(defaultextension=".docx",
+                                            filetypes=[("Word Document", "*.docx")],
+                                            initialfile="transcription.docx")
+        if not path:
+            return
+        try:
+            from docx import Document
+            doc = Document()
+            doc.add_heading("YouTube Transcription", 0)
+            for line in text.split("\n"):
+                if line.startswith("["):
+                    doc.add_heading(line, level=2)
+                elif line.strip():
+                    doc.add_paragraph(line)
+            doc.save(path)
+            self.hist_export_status.set(f"Saved: {os.path.basename(path)}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Export failed: {e}")
+    
+    def _hist_export_pdf(self):
+        from tkinter import filedialog
+        text = self.hist_preview.get("1.0", END).strip()
+        if not text:
+            messagebox.showwarning("Warning", "No content to export")
+            return
+        path = filedialog.asksaveasfilename(defaultextension=".pdf",
+                                            filetypes=[("PDF Document", "*.pdf")],
+                                            initialfile="transcription.pdf")
+        if not path:
+            return
+        try:
+            from fpdf import FPDF
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Arial", size=12)
+            pdf.cell(0, 10, "YouTube Transcription", ln=True, align="C")
+            pdf.ln(5)
+            pdf.set_font("Arial", size=10)
+            for line in text.split("\n"):
+                if line.startswith("["):
+                    pdf.set_font("Arial", "B", 11)
+                    pdf.cell(0, 8, line, ln=True)
+                    pdf.set_font("Arial", size=10)
+                elif line.strip():
+                    pdf.multi_cell(0, 6, line)
+            pdf.output(path)
+            self.hist_export_status.set(f"Saved: {os.path.basename(path)}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Export failed: {e}")
+    
     # ─── History Page ──────────────────────────────────────────
     def _page_history(self):
         t = self.T()
@@ -503,7 +559,7 @@ class TranscriberGUI:
         
         # Preview
         pb = self._card(pg)
-        pb.grid(row=2, column=1, sticky="nswe", padx=(4, 12), pady=(0, 12))
+        pb.grid(row=2, column=1, sticky="nswe", padx=(4, 12), pady=(0, 6))
         self._card_hdr(pb, "PREVIEW")
         pi = Frame(pb, bg=t["surface"])
         pi.pack(fill="both", expand=True, padx=4, pady=4)
@@ -520,6 +576,14 @@ class TranscriberGUI:
         pm.add_command(label="Copy All", command=self._copy_all_hist)
         self.hist_preview.bind("<Button-3>", lambda e: pm.tk_popup(e.x_root, e.y_root))
         Scrollbar(pi, command=self.hist_preview.yview).pack(side="right", fill="y")
+        
+        # Export buttons for history
+        ef = Frame(pg, bg=t["bg"])
+        ef.grid(row=3, column=1, sticky="we", padx=(4, 12), pady=(0, 12))
+        self._btn(ef, text="Export as DOCX", command=self._hist_export_docx, padx=10).pack(side="left")
+        self._btn(ef, text="Export as PDF", command=self._hist_export_pdf, padx=10).pack(side="left", padx=(6, 0))
+        self.hist_export_status = StringVar(value="")
+        Label(ef, textvariable=self.hist_export_status, font=("Segoe UI", 9), bg=t["bg"], fg=t["ok"]).pack(side="left", padx=(10, 0))
         
         return pg
     
