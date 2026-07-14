@@ -61,21 +61,31 @@ class TranscriberGUI:
     def T(self): return THEMES[self.theme]
     
     def _load_theme(self):
+        self._config = {}
         try:
             with open(self.config_file, "r") as f:
                 for line in f:
-                    if line.startswith("theme="):
-                        return line.strip().split("=")[1]
+                    if "=" in line:
+                        k, v = line.strip().split("=", 1)
+                        self._config[k] = v
         except:
             pass
-        return "dark"
+        # Load save_dir from config
+        if "save_dir" in self._config:
+            self.transcriptions_dir = self._config["save_dir"]
+            os.makedirs(self.transcriptions_dir, exist_ok=True)
+        return self._config.get("theme", "dark")
     
-    def _save_theme(self):
+    def _save_config(self):
         try:
             with open(self.config_file, "w") as f:
                 f.write(f"theme={self.theme}\n")
+                f.write(f"save_dir={self.transcriptions_dir}\n")
         except:
             pass
+    
+    def _save_theme(self):
+        self._save_config()
     
     def build_ui(self):
         t = self.T()
@@ -84,6 +94,10 @@ class TranscriberGUI:
             w.destroy()
         
         self.root.configure(bg=t["bg"])
+        
+        # Minimize to tray
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.bind("<Unmap>", self._on_minimize)
         
         # Header
         hdr = Frame(self.root, bg=t["bg_header"])
@@ -275,13 +289,15 @@ class TranscriberGUI:
         r0 = Frame(pg, bg=t["bg"])
         r0.grid(row=0, column=0, sticky="we", padx=12, pady=(12, 6))
         r0.grid_columnconfigure(1, weight=1)
-        Label(r0, text="URL", font=("Segoe UI Bold", 10), bg=t["bg"], fg=t["text"], width=6, anchor="w").grid(row=0, column=0, padx=(0, 8))
+        Label(r0, text="URL(s)", font=("Segoe UI Bold", 10), bg=t["bg"], fg=t["text"], width=6, anchor="w").grid(row=0, column=0, padx=(0, 8))
         self.url_var = StringVar()
         self.url_entry = self._entry(r0, textvariable=self.url_var)
         self.url_entry.grid(row=0, column=1, sticky="we", ipady=4)
         self.url_entry.bind("<Control-v>", self._ctrl_v)
         self.url_entry.bind("<Control-V>", self._ctrl_v)
         self._btn(r0, text="Paste", command=self._paste, width=7).grid(row=0, column=2, padx=(6, 0))
+        Label(r0, text="Separate multiple URLs with comma", font=("Segoe UI", 8),
+              bg=t["bg"], fg=t["text_mut"]).grid(row=1, column=1, sticky="w", pady=(2, 0))
         
         # Time + Settings
         r1 = Frame(pg, bg=t["bg"])
@@ -309,11 +325,11 @@ class TranscriberGUI:
         si = Frame(sb, bg=t["surface"])
         si.pack(fill="x", padx=8, pady=8)
         
-        self.lang_var = StringVar(value="ru")
+        self.lang_var = StringVar(value="auto")
         self.chunk_var = StringVar(value="5")
         self.model_var = StringVar(value="medium")
         
-        for lbl, var, vals, w in [("Lang", self.lang_var, ["ru","en","uk"], 4), ("Chunk", self.chunk_var, ["1","3","5","10","15"], 4), ("Model", self.model_var, ["tiny","base","small","medium","large"], 7)]:
+        for lbl, var, vals, w in [("Lang", self.lang_var, ["auto","ru","en","uk"], 6), ("Chunk", self.chunk_var, ["1","3","5","10","15"], 4), ("Model", self.model_var, ["tiny","base","small","medium","large"], 7)]:
             c = Frame(si, bg=t["surface"])
             c.pack(side="left", padx=(0, 12))
             Label(c, text=lbl, font=("Segoe UI", 8), bg=t["surface"], fg=t["text_mut"]).pack(anchor="w")
@@ -360,7 +376,71 @@ class TranscriberGUI:
         Scrollbar(li, command=self.log_text.yview).pack(side="right", fill="y")
         self.log_text.config(yscrollcommand=self.log_text.master.winfo_children()[-1].set)
         
+        # Export section
+        ef = Frame(pg, bg=t["bg"])
+        ef.grid(row=5, column=0, sticky="we", padx=12, pady=(0, 12))
+        self._btn(ef, text="Export as DOCX", command=self._export_docx, padx=12).pack(side="left")
+        self._btn(ef, text="Export as PDF", command=self._export_pdf, padx=12).pack(side="left", padx=(8, 0))
+        self.export_status = StringVar(value="")
+        Label(ef, textvariable=self.export_status, font=("Segoe UI", 9), bg=t["bg"], fg=t["ok"]).pack(side="left", padx=(12, 0))
+        
         return pg
+    
+    def _export_docx(self):
+        from tkinter import filedialog
+        text = self.log_text.get("1.0", END).strip()
+        if not text:
+            messagebox.showwarning("Warning", "No content to export")
+            return
+        path = filedialog.asksaveasfilename(defaultextension=".docx",
+                                            filetypes=[("Word Document", "*.docx")],
+                                            initialfile="transcription.docx")
+        if not path:
+            return
+        try:
+            from docx import Document
+            doc = Document()
+            doc.add_heading("YouTube Transcription", 0)
+            for line in text.split("\n"):
+                if line.startswith("["):
+                    doc.add_heading(line, level=2)
+                elif line.strip():
+                    doc.add_paragraph(line)
+            doc.save(path)
+            self.export_status.set(f"Saved: {os.path.basename(path)}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Export failed: {e}")
+    
+    def _export_pdf(self):
+        from tkinter import filedialog
+        text = self.log_text.get("1.0", END).strip()
+        if not text:
+            messagebox.showwarning("Warning", "No content to export")
+            return
+        path = filedialog.asksaveasfilename(defaultextension=".pdf",
+                                            filetypes=[("PDF Document", "*.pdf")],
+                                            initialfile="transcription.pdf")
+        if not path:
+            return
+        try:
+            from fpdf import FPDF
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Arial", size=12)
+            pdf.cell(0, 10, "YouTube Transcription", ln=True, align="C")
+            pdf.ln(5)
+            pdf.set_font("Arial", size=10)
+            for line in text.split("\n"):
+                if line.startswith("["):
+                    pdf.set_font("Arial", "B", 11)
+                    pdf.cell(0, 8, line, ln=True)
+                    pdf.set_font("Arial", size=10)
+                elif line.strip():
+                    pdf.multi_cell(0, 6, line)
+            pdf.output(path)
+            self.export_status.set(f"Saved: {os.path.basename(path)}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Export failed: {e}")
     
     # ─── History Page ──────────────────────────────────────────
     def _page_history(self):
@@ -495,6 +575,7 @@ class TranscriberGUI:
         hdr.pack(fill="x", padx=12, pady=(12, 6))
         Label(hdr, text="SETTINGS", font=("Segoe UI Bold", 14), bg=t["bg"], fg=t["accent"]).pack(side="left")
         
+        # Appearance
         c = self._card(pg)
         c.pack(fill="x", padx=12, pady=6)
         self._card_hdr(c, "APPEARANCE")
@@ -504,15 +585,46 @@ class TranscriberGUI:
         self._btn(ci, text="Light", command=lambda: self._set_theme("light")).pack(side="right", padx=(8, 0))
         self._btn(ci, text="Dark", command=lambda: self._set_theme("dark")).pack(side="right")
         
+        # Storage
+        s = self._card(pg)
+        s.pack(fill="x", padx=12, pady=6)
+        self._card_hdr(s, "STORAGE")
+        si = Frame(s, bg=t["surface"])
+        si.pack(fill="x", padx=8, pady=12)
+        Label(si, text="Save folder:", font=("Segoe UI", 10), bg=t["surface"], fg=t["text"]).pack(side="left")
+        self.save_dir_var = StringVar(value=self.transcriptions_dir)
+        save_entry = self._entry(si, textvariable=self.save_dir_var, font=("Consolas", 9))
+        save_entry.pack(side="left", fill="x", expand=True, padx=(8, 8))
+        self._btn(si, text="Browse", command=self._browse_save_dir, padx=8).pack(side="left")
+        self._btn(si, text="Reset", command=self._reset_save_dir, padx=8).pack(side="left", padx=(4, 0))
+        
+        # About
         a = self._card(pg)
         a.pack(fill="x", padx=12, pady=6)
         self._card_hdr(a, "ABOUT")
         ai = Frame(a, bg=t["surface"])
         ai.pack(fill="x", padx=8, pady=8)
-        Label(ai, text="YouTube Transcriber v1.0", font=("Segoe UI", 10), bg=t["surface"], fg=t["text"]).pack(anchor="w")
+        Label(ai, text="YouTube Transcriber v1.1", font=("Segoe UI", 10), bg=t["surface"], fg=t["text"]).pack(anchor="w")
         Label(ai, text="github.com/viketvova/youtube-transcriber", font=("Segoe UI", 9), bg=t["surface"], fg=t["accent"]).pack(anchor="w", pady=(2, 0))
         
         return pg
+    
+    def _browse_save_dir(self):
+        from tkinter import filedialog
+        d = filedialog.askdirectory(initialdir=self.transcriptions_dir)
+        if d:
+            self.save_dir_var.set(d)
+            self.transcriptions_dir = d
+            self._save_config()
+            self.refresh_history()
+    
+    def _reset_save_dir(self):
+        default = os.path.join(os.getcwd(), "transcriptions")
+        self.save_dir_var.set(default)
+        self.transcriptions_dir = default
+        os.makedirs(default, exist_ok=True)
+        self._save_config()
+        self.refresh_history()
     
     # ─── Theme ─────────────────────────────────────────────────
     def _set_theme(self, theme):
@@ -555,6 +667,13 @@ class TranscriberGUI:
     def _paste(self):
         try: self.url_var.set(self.root.clipboard_get().strip())
         except: pass
+    
+    def _on_close(self):
+        self.root.destroy()
+    
+    def _on_minimize(self, event=None):
+        if self.root.state() == "iconic":
+            self.root.after(100, lambda: self.root.state("iconic"))
     
     def _copy_all_hist(self):
         self.root.clipboard_clear()
@@ -621,6 +740,13 @@ class TranscriberGUI:
         self.prog_var.set(v)
         if s: self.status_var.set(s)
         if tl is not None: self.tl_var.set(tl)
+        # Update window title with progress
+        if v > 0 and v < 100:
+            self.root.title(f"[{int(v)}%] YouTube Transcriber")
+        elif v >= 100:
+            self.root.title("YouTube Transcriber - Done!")
+        else:
+            self.root.title("YouTube Transcriber")
         self.root.update_idletasks()
     
     def validate_url(self, url): return bool(re.match(r'https?://(www\.)?(youtube\.com|youtu\.be)', url))
@@ -630,18 +756,44 @@ class TranscriberGUI:
     
     # ─── Transcription ─────────────────────────────────────────
     def _start(self):
-        url = self.url_var.get().strip()
-        if not url:
+        url_input = self.url_var.get().strip()
+        if not url_input:
             messagebox.showwarning("Warning", "Please enter a YouTube URL")
             return
-        if not self.validate_url(url):
-            messagebox.showerror("Error", "Invalid YouTube URL")
-            return
+        
+        # Parse multiple URLs (comma or newline separated)
+        urls = [u.strip() for u in url_input.replace("\n", ",").split(",") if u.strip()]
+        
+        # Validate all URLs
+        for url in urls:
+            if not self.validate_url(url):
+                messagebox.showerror("Error", f"Invalid YouTube URL:\n{url}")
+                return
+        
         self.clear_log()
         self._set_progress(0, "Starting...", "")
         self.is_processing = True
         self.start_time_epoch = time.time()
-        threading.Thread(target=self._run, args=(url,), daemon=True).start()
+        
+        if len(urls) == 1:
+            threading.Thread(target=self._run, args=(urls[0],), daemon=True).start()
+        else:
+            self.log(f"Batch mode: {len(urls)} videos to process", "info")
+            threading.Thread(target=self._run_batch, args=(urls,), daemon=True).start()
+    
+    def _run_batch(self, urls):
+        total = len(urls)
+        for i, url in enumerate(urls, 1):
+            if not self.is_processing:
+                break
+            self.log(f"\n{'='*60}", "info")
+            self.log(f"[{i}/{total}] Processing: {url}", "info")
+            self.log(f"{'='*60}", "info")
+            self._run(url, batch=True)
+        self.is_processing = False
+        self.root.title("YouTube Transcriber")
+        if self.is_processing == False:
+            self.log(f"\nBatch complete: {total} videos processed", "success")
     
     def _update_tl(self, p):
         if p > 0:
@@ -649,14 +801,14 @@ class TranscriberGUI:
             rem = el / (p / 100) - el
             self.tl_var.set(f"~{int(rem//60)}m {int(rem%60)}s left" if rem > 0 else "")
     
-    def _run(self, url):
+    def _run(self, url, batch=False):
         lang = self.lang_var.get()
         model = self.model_var.get()
         chunk = int(self.chunk_var.get())
         ss = parse_time(self.start_var.get().strip()) if self.start_var.get().strip() else 0.0
         es = parse_time(self.end_var.get().strip()) if self.end_var.get().strip() else 0.0
         
-        ln = {"ru": "Russian", "en": "English", "uk": "Ukrainian"}
+        ln = {"auto": "Auto-detect", "ru": "Russian", "en": "English", "uk": "Ukrainian"}
         self.log(f"URL: {url}", "info")
         self.log(f"Language: {ln.get(lang, lang)} | Model: {model} | Chunk: {chunk}min", "info")
         if ss > 0 or es > 0:

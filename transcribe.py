@@ -262,6 +262,10 @@ def transcribe_audio(
         else:
             compute_type = "int8"  # Faster on CPU
     
+    # Handle auto language detection
+    if language == "auto" or not language:
+        language = None
+    
     try:
         print(f"  Loading model (device={device}, compute={compute_type})...")
         model = WhisperModel(
