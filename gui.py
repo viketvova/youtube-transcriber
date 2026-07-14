@@ -504,7 +504,7 @@ class TranscriberGUI:
         pg = Frame(self.content, bg=t["bg"])
         pg.grid_columnconfigure(0, weight=2)
         pg.grid_columnconfigure(1, weight=3)
-        pg.grid_rowconfigure(3, weight=1)
+        pg.grid_rowconfigure(2, weight=1)
         
         # Header
         hdr = Frame(pg, bg=t["bg"])
