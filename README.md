@@ -143,15 +143,18 @@ python transcribe.py https://www.youtube.com/watch?v=XXXXX --model large
 ============================================================
 TRANSCRIPTION
 Source: https://www.youtube.com/watch?v=XXXXX
-Language: Russian
-Segments: 127
+Language: English
+Segments: 84
 ============================================================
 
 [00:00:00 - 00:05:00]
-Привет всем, сегодня мы поговорим о новом обновлении...
+Hey everyone, today we're going to talk about the latest update to the platform and what it means for creators...
 
 [00:05:00 - 00:10:00]
-Как вы видите на экране, первый шаг — это открыть меню...
+As you can see on screen, the first step is to open the settings menu and navigate to the new dashboard...
+
+[00:10:00 - 00:15:00]
+This feature has been requested by the community for months, and I'm really excited to finally show you how it works...
 
 ============================================================
 END OF TRANSCRIPTION
