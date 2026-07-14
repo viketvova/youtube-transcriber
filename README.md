@@ -132,7 +132,7 @@ python transcribe.py https://www.youtube.com/watch?v=XXXXX --model large
 |-------|------|-------|----------|
 | `tiny` | 39 MB | ~1 min / 30min video | Quick preview |
 | `small` | 244 MB | ~3 min | Good balance |
-| **`medium`** | **769 MB** | **~12 min** | **Recommended for Russian** |
+| **`medium`** | **769 MB** | **~12 min** | **Best overall** |
 | `large` | 1.5 GB | ~25 min | Maximum accuracy |
 
 ---
