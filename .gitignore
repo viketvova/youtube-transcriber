@@ -22,6 +22,10 @@ transcriptions/
 # Logs
 *.log
 
+# Secrets
+.env
+.env.*
+
 # IDE
 .vscode/
 .idea/

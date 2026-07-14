@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""YouTube Video Transcriber - Modern GUI"""
+"""YouTube Transcriber — Blender-style UI"""
 
 import os, re, sys, threading, tempfile, shutil, time
 from pathlib import Path
 from tkinter import (
     Tk, Label, Entry, Button, StringVar, OptionMenu, Listbox,
-    Frame, LabelFrame, Text, Scrollbar, messagebox, END, IntVar, Menu, Checkbutton, BooleanVar
+    Frame, Text, Scrollbar, messagebox, END, IntVar, Menu
 )
 from tkinter import ttk
 
@@ -14,438 +14,562 @@ from transcribe import (
     format_output, parse_time, format_timestamp
 )
 
-# === Color Themes ===
 THEMES = {
     "dark": {
-        "bg": "#1e1e2e", "fg": "#cdd6f4", "accent": "#89b4fa",
-        "surface": "#313244", "surface2": "#45475a", "surface3": "#585b70",
-        "green": "#a6e3a1", "red": "#f38ba8", "yellow": "#f9e2af",
-        "blue": "#89b4fa", "muted": "#6c7086", "border": "#45475a",
-        "entry_bg": "#313244", "entry_fg": "#cdd6f4",
-        "btn_bg": "#89b4fa", "btn_fg": "#1e1e2e",
-        "btn_hover": "#b4d0fb", "btn_disabled": "#45475a",
-        "listbox_bg": "#313244", "listbox_fg": "#cdd6f4",
-        "listbox_select": "#45475a", "highlight_bg": "#f9e2af40",
+        "bg": "#303030", "bg_header": "#383838",
+        "surface": "#383838", "surface_lighter": "#424242", "surface_hover": "#4a4a4a",
+        "border": "#505050",
+        "text": "#e8e8e8", "text_sec": "#a0a0a0", "text_mut": "#707070",
+        "accent": "#e87d0d", "accent_h": "#f09020", "accent_p": "#c06808",
+        "ok": "#5fa85f", "err": "#cc4444",
+        "inp": "#2a2a2a", "inp_b": "#505050",
     },
     "light": {
-        "bg": "#eff1f5", "fg": "#4c4f69", "accent": "#1e66f5",
-        "surface": "#ccd0da", "surface2": "#bcc0cc", "surface3": "#acb0be",
-        "green": "#40a02b", "red": "#d20f39", "yellow": "#df8e1d",
-        "blue": "#1e66f5", "muted": "#7c7f93", "border": "#bcc0cc",
-        "entry_bg": "#ffffff", "entry_fg": "#4c4f69",
-        "btn_bg": "#1e66f5", "btn_fg": "#ffffff",
-        "btn_hover": "#4d8af7", "btn_disabled": "#ccd0da",
-        "listbox_bg": "#ffffff", "listbox_fg": "#4c4f69",
-        "listbox_select": "#ccd0da", "highlight_bg": "#df8e1d40",
+        "bg": "#e8e8e8", "bg_header": "#d0d0d0",
+        "surface": "#ffffff", "surface_lighter": "#f0f0f0", "surface_hover": "#e0e0e0",
+        "border": "#b0b0b0",
+        "text": "#1a1a1a", "text_sec": "#555555", "text_mut": "#888888",
+        "accent": "#e87d0d", "accent_h": "#f09020", "accent_p": "#c06808",
+        "ok": "#3a8a3a", "err": "#cc3333",
+        "inp": "#ffffff", "inp_b": "#b0b0b0",
     },
 }
+
+app = None
 
 
 class TranscriberGUI:
     def __init__(self):
+        global app
+        app = self
         self.root = Tk()
         self.root.title("YouTube Transcriber")
-        self.root.geometry("950x780")
-        self.root.minsize(750, 600)
-        self.root.resizable(True, True)
-        
+        self.root.geometry("1100x720")
+        self.root.minsize(900, 600)
+        self.config_file = os.path.join(os.path.dirname(__file__), "config.txt")
+        self.theme = self._load_theme()
         self.is_processing = False
         self.start_time_epoch = 0
         self.transcriptions_dir = os.path.join(os.getcwd(), "transcriptions")
         os.makedirs(self.transcriptions_dir, exist_ok=True)
-        
-        self.theme_name = BooleanVar(value=False)  # False=dark, True=light
-        self.theme = THEMES["dark"]
-        
-        # Style
-        self.style = ttk.Style()
-        self.style.theme_use("clam")
-        
-        self.setup_ui()
-        self.apply_theme()
+        self.current_page = "transcribe"
+        self._all_history = []
+        self._history_files = []
+        self.build_ui()
         self.refresh_history()
     
-    def setup_ui(self):
-        # Main container
-        self.main_frame = Frame(self.root)
-        self.main_frame.pack(fill="both", expand=True)
+    def T(self): return THEMES[self.theme]
+    
+    def _load_theme(self):
+        try:
+            with open(self.config_file, "r") as f:
+                for line in f:
+                    if line.startswith("theme="):
+                        return line.strip().split("=")[1]
+        except:
+            pass
+        return "dark"
+    
+    def _save_theme(self):
+        try:
+            with open(self.config_file, "w") as f:
+                f.write(f"theme={self.theme}\n")
+        except:
+            pass
+    
+    def build_ui(self):
+        t = self.T()
+        # Destroy old content
+        for w in self.root.winfo_children():
+            w.destroy()
         
-        # === Top Bar ===
-        self.top_bar = Frame(self.main_frame)
-        self.top_bar.pack(fill="x", padx=16, pady=(12, 0))
+        self.root.configure(bg=t["bg"])
         
-        Label(self.top_bar, text="YouTube Transcriber", font=("Segoe UI Semibold", 16)).pack(side="left")
+        # Header
+        hdr = Frame(self.root, bg=t["bg_header"])
+        hdr.pack(fill="x")
+        nav = Frame(hdr, bg=t["bg_header"])
+        nav.pack(side="left", padx=8)
+        self.nav_btns = {}
+        for pid, label in [("transcribe", "Transcribe"), ("history", "History"), ("settings", "Settings")]:
+            is_active = pid == self.current_page
+            b = Label(nav, text=f"  {label}  ", font=("Segoe UI", 10),
+                      bg=t["surface_hover"] if is_active else t["bg_header"],
+                      fg=t["accent"] if is_active else t["text_sec"], cursor="hand2", padx=8, pady=8)
+            b.pack(side="left")
+            b.bind("<Button-1>", lambda e, p=pid: self.show_page(p))
+            self.nav_btns[pid] = b
+        Label(hdr, text="YouTube Transcriber", font=("Segoe UI Semibold", 10),
+              bg=t["bg_header"], fg=t["text_sec"]).pack(side="right", padx=12)
         
-        # Theme toggle
-        self.theme_frame = Frame(self.top_bar)
-        self.theme_frame.pack(side="right")
+        # Content
+        self.content = Frame(self.root, bg=t["bg"])
+        self.content.pack(fill="both", expand=True)
+        self.content.grid_columnconfigure(0, weight=1)
+        self.content.grid_rowconfigure(0, weight=1)
         
-        self.theme_label = Label(self.theme_frame, text="Dark", font=("Segoe UI", 9))
-        self.theme_label.pack(side="left", padx=(0, 6))
-        
-        self.theme_switch = ttk.Checkbutton(self.theme_frame, variable=self.theme_name,
-                                             style="Switch.TCheckbutton",
-                                             command=self.toggle_theme)
-        self.theme_switch.pack(side="left")
-        
-        self.theme_label2 = Label(self.theme_frame, text="Light", font=("Segoe UI", 9))
-        self.theme_label2.pack(side="left", padx=(6, 0))
-        
-        # === Content Area ===
-        content = Frame(self.main_frame)
-        content.pack(fill="both", expand=True, padx=16, pady=12)
-        
-        # -- Left column: controls --
-        left = Frame(content, width=420)
-        left.pack(side="left", fill="y", padx=(0, 12))
-        left.pack_propagate(False)
+        self.pages = {}
+        self.pages["transcribe"] = self._page_transcribe()
+        self.pages["history"] = self._page_history()
+        self.pages["settings"] = self._page_settings()
+        self.show_page(self.current_page)
+    
+    def show_page(self, pid):
+        t = self.T()
+        self.current_page = pid
+        for p, btn in self.nav_btns.items():
+            btn.configure(bg=t["surface_hover"] if p == pid else t["bg_header"],
+                          fg=t["accent"] if p == pid else t["text_sec"])
+        for p, pg in self.pages.items():
+            pg.grid_forget() if p != pid else pg.grid(row=0, column=0, sticky="nswe")
+    
+    def _entry(self, parent, **kw):
+        t = self.T()
+        d = dict(font=("Segoe UI", 10), bg=t["inp"], fg=t["text"], insertbackground=t["text"],
+                 relief="flat", highlightthickness=1, highlightbackground=t["inp_b"], highlightcolor=t["accent"])
+        d.update(kw)
+        return Entry(parent, **d)
+    
+    def _btn(self, parent, accent=False, **kw):
+        t = self.T()
+        kw.setdefault("relief", "flat")
+        kw.setdefault("bd", 0)
+        kw.setdefault("font", ("Segoe UI", 10))
+        kw.setdefault("cursor", "hand2")
+        kw.setdefault("padx", 12)
+        kw.setdefault("pady", 4)
+        b = Button(parent, **kw)
+        bg = t["accent"] if accent else t["surface_lighter"]
+        fg = "#ffffff" if accent else t["text"]
+        abg = t["accent_h"] if accent else t["surface_hover"]
+        b.configure(bg=bg, fg=fg, activebackground=abg, activeforeground=fg)
+        b.bind("<Enter>", lambda e: b.configure(bg=t["accent_h"] if accent else t["surface_hover"]))
+        b.bind("<Leave>", lambda e: b.configure(bg=bg))
+        return b
+    
+    def _card(self, parent):
+        t = self.T()
+        return Frame(parent, bg=t["surface"], highlightthickness=1, highlightbackground=t["border"])
+    
+    def _card_hdr(self, parent, title):
+        t = self.T()
+        h = Frame(parent, bg=t["surface_lighter"])
+        h.pack(fill="x")
+        Label(h, text=f"  {title}", font=("Segoe UI Bold", 9),
+              bg=t["surface_lighter"], fg=t["text_sec"]).pack(side="left", padx=4, pady=4)
+    
+    def _time_validate(self, var):
+        """Auto-format time input: adds colons, keeps cursor position."""
+        def handler(*args):
+            val = var.get()
+            # Remove non-digits
+            digits = "".join(c for c in val if c.isdigit())[:6]
+            # Format as XX:XX:XX
+            parts = []
+            for i in range(0, len(digits), 2):
+                parts.append(digits[i:i+2])
+            formatted = ":".join(parts)
+            if val != formatted:
+                # Save cursor position relative to digits
+                pos = var._last_pos if hasattr(var, '_last_pos') else len(digits)
+                var.set(formatted)
+                # Restore cursor: count how many real chars before cursor
+                new_pos = min(pos, len(digits))
+                # Convert digit index to string index (skip colons)
+                str_pos = 0
+                d_count = 0
+                for ch in formatted:
+                    if ch == ":":
+                        str_pos += 1
+                    else:
+                        if d_count >= new_pos:
+                            break
+                        d_count += 1
+                        str_pos += 1
+        return handler
+    
+    def _time_key(self, var, entry):
+        """Handle keypress for time input."""
+        def handler(event):
+            if event.keysym in ("BackSpace", "Delete"):
+                val = var.get()
+                digits = "".join(c for c in val if c.isdigit())
+                pos = entry.index("insert")
+                # Find which digit index cursor is at
+                str_idx = 0
+                d_idx = 0
+                for i, ch in enumerate(val):
+                    if i >= pos:
+                        break
+                    if ch != ":":
+                        d_idx += 1
+                if event.keysym == "BackSpace" and d_idx > 0:
+                    digits = digits[:d_idx-1] + digits[d_idx:]
+                elif event.keysym == "Delete" and d_idx < len(digits):
+                    digits = digits[:d_idx] + digits[d_idx+1:]
+                else:
+                    return "break"
+                parts = [digits[i:i+2] for i in range(0, len(digits), 2)]
+                formatted = ":".join(parts)
+                var.set(formatted)
+                # Position cursor after the modified digit
+                new_d_idx = d_idx - 1 if event.keysym == "BackSpace" else d_idx
+                str_pos = 0
+                dc = 0
+                for ch in formatted:
+                    if dc >= new_d_idx:
+                        break
+                    str_pos += 1
+                    if ch != ":":
+                        dc += 1
+                entry.icursor(str_pos)
+                return "break"
+            
+            if event.char and event.char.isdigit():
+                val = var.get()
+                digits = "".join(c for c in val if c.isdigit())
+                if len(digits) >= 6:
+                    return "break"
+                pos = entry.index("insert")
+                # Find digit index at cursor
+                d_idx = 0
+                for i, ch in enumerate(val):
+                    if i >= pos:
+                        break
+                    if ch != ":":
+                        d_idx += 1
+                # Insert digit
+                digits = digits[:d_idx] + event.char + digits[d_idx+1:] if d_idx < len(digits) else digits[:d_idx] + event.char
+                parts = [digits[i:i+2] for i in range(0, len(digits), 2)]
+                formatted = ":".join(parts)
+                var.set(formatted)
+                # Move cursor after inserted digit
+                new_d_idx = d_idx + 1
+                str_pos = 0
+                dc = 0
+                for ch in formatted:
+                    if dc >= new_d_idx:
+                        break
+                    str_pos += 1
+                    if ch != ":":
+                        dc += 1
+                entry.icursor(str_pos)
+                return "break"
+            
+            # Allow Ctrl+A, arrow keys etc
+            if event.state & 0x4:  # Ctrl
+                return
+            if event.keysym in ("Left", "Right", "Home", "End"):
+                return
+            return "break"
+        return handler
+    
+    # ─── Transcribe Page ───────────────────────────────────────
+    def _page_transcribe(self):
+        t = self.T()
+        pg = Frame(self.content, bg=t["bg"])
+        pg.grid_columnconfigure(0, weight=1)
+        pg.grid_rowconfigure(4, weight=1)
         
         # URL
-        self._make_section(left, "YouTube URL")
-        url_frame = Frame(left)
-        url_frame.pack(fill="x", pady=(0, 12))
-        
+        r0 = Frame(pg, bg=t["bg"])
+        r0.grid(row=0, column=0, sticky="we", padx=12, pady=(12, 6))
+        r0.grid_columnconfigure(1, weight=1)
+        Label(r0, text="URL", font=("Segoe UI Bold", 10), bg=t["bg"], fg=t["text"], width=6, anchor="w").grid(row=0, column=0, padx=(0, 8))
         self.url_var = StringVar()
-        self.url_entry = Entry(url_frame, textvariable=self.url_var, font=("Segoe UI", 11))
-        self.url_entry.pack(side="left", fill="x", expand=True, ipady=6)
-        self.url_entry.bind("<Control-v>", self._on_ctrl_v)
-        self.url_entry.bind("<Control-V>", self._on_ctrl_v)
+        self.url_entry = self._entry(r0, textvariable=self.url_var)
+        self.url_entry.grid(row=0, column=1, sticky="we", ipady=4)
+        self.url_entry.bind("<Control-v>", self._ctrl_v)
+        self.url_entry.bind("<Control-V>", self._ctrl_v)
+        self._btn(r0, text="Paste", command=self._paste, width=7).grid(row=0, column=2, padx=(6, 0))
         
-        self.paste_btn = Button(url_frame, text="Paste", command=self.paste_url,
-                                font=("Segoe UI", 10, "bold"), width=7, relief="flat")
-        self.paste_btn.pack(side="left", padx=(6, 0))
+        # Time + Settings
+        r1 = Frame(pg, bg=t["bg"])
+        r1.grid(row=1, column=0, sticky="we", padx=12, pady=6)
         
-        # Time Range
-        self._make_section(left, "Time Range (optional)")
-        time_frame = Frame(left)
-        time_frame.pack(fill="x", pady=(0, 12))
-        
-        Label(time_frame, text="From", font=("Segoe UI", 9)).pack(side="left")
+        tb = self._card(r1)
+        tb.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self._card_hdr(tb, "TIME RANGE")
+        ti = Frame(tb, bg=t["surface"])
+        ti.pack(fill="x", padx=8, pady=8)
         self.start_var = StringVar()
-        self.start_entry = Entry(time_frame, textvariable=self.start_var, width=9,
-                                 font=("Consolas", 11), justify="center")
-        self.start_entry.pack(side="left", padx=(4, 12))
-        
-        Label(time_frame, text="To", font=("Segoe UI", 9)).pack(side="left")
+        self.start_entry = self._entry(ti, textvariable=self.start_var, width=10, font=("Consolas", 10), justify="center")
+        self.start_entry.pack(side="left", padx=(0, 8))
+        self.start_entry.bind("<Key>", self._time_key(self.start_var, self.start_entry))
+        Label(ti, text="-", font=("Segoe UI", 10), bg=t["surface"], fg=t["text_mut"]).pack(side="left")
         self.end_var = StringVar()
-        self.end_entry = Entry(time_frame, textvariable=self.end_var, width=9,
-                               font=("Consolas", 11), justify="center")
-        self.end_entry.pack(side="left", padx=(4, 12))
+        self.end_entry = self._entry(ti, textvariable=self.end_var, width=10, font=("Consolas", 10), justify="center")
+        self.end_entry.pack(side="left", padx=(8, 8))
+        self.end_entry.bind("<Key>", self._time_key(self.end_var, self.end_entry))
+        Label(ti, text="HH:MM:SS", font=("Segoe UI", 8), bg=t["surface"], fg=t["text_mut"]).pack(side="left")
         
-        Label(time_frame, text="HH:MM:SS", font=("Segoe UI", 8)).pack(side="left")
+        sb = self._card(r1)
+        sb.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        self._card_hdr(sb, "SETTINGS")
+        si = Frame(sb, bg=t["surface"])
+        si.pack(fill="x", padx=8, pady=8)
         
-        # Settings row
-        self._make_section(left, "Settings")
-        settings_frame = Frame(left)
-        settings_frame.pack(fill="x", pady=(0, 12))
-        
-        # Language
-        lang_frame = Frame(settings_frame)
-        lang_frame.pack(side="left", padx=(0, 16))
-        Label(lang_frame, text="Language", font=("Segoe UI", 8)).pack(anchor="w")
         self.lang_var = StringVar(value="ru")
-        self.lang_menu = OptionMenu(lang_frame, self.lang_var, "ru", "en", "uk")
-        self.lang_menu.config(width=4, font=("Segoe UI", 10))
-        self.lang_menu.pack()
-        
-        # Chunk
-        chunk_frame = Frame(settings_frame)
-        chunk_frame.pack(side="left", padx=(0, 16))
-        Label(chunk_frame, text="Chunk min", font=("Segoe UI", 8)).pack(anchor="w")
         self.chunk_var = StringVar(value="5")
-        self.chunk_menu = OptionMenu(chunk_frame, self.chunk_var, "1", "3", "5", "10", "15")
-        self.chunk_menu.config(width=4, font=("Segoe UI", 10))
-        self.chunk_menu.pack()
-        
-        # Model
-        model_frame = Frame(settings_frame)
-        model_frame.pack(side="left")
-        Label(model_frame, text="Model", font=("Segoe UI", 8)).pack(anchor="w")
         self.model_var = StringVar(value="medium")
-        self.model_menu = OptionMenu(model_frame, self.model_var, "tiny", "base", "small", "medium", "large")
-        self.model_menu.config(width=7, font=("Segoe UI", 10))
-        self.model_menu.pack()
         
-        # Progress
-        self.progress_var = IntVar(value=0)
-        self.progress_bar = ttk.Progressbar(left, variable=self.progress_var, maximum=100)
-        self.progress_bar.pack(fill="x", pady=(0, 4))
+        for lbl, var, vals, w in [("Lang", self.lang_var, ["ru","en","uk"], 4), ("Chunk", self.chunk_var, ["1","3","5","10","15"], 4), ("Model", self.model_var, ["tiny","base","small","medium","large"], 7)]:
+            c = Frame(si, bg=t["surface"])
+            c.pack(side="left", padx=(0, 12))
+            Label(c, text=lbl, font=("Segoe UI", 8), bg=t["surface"], fg=t["text_mut"]).pack(anchor="w")
+            m = OptionMenu(c, var, *vals)
+            m.config(width=w, font=("Segoe UI", 10), bg=t["inp"], fg=t["text"],
+                     activebackground=t["surface_hover"], activeforeground=t["text"],
+                     relief="flat", highlightthickness=1, highlightbackground=t["inp_b"])
+            m.pack()
         
-        status_frame = Frame(left)
-        status_frame.pack(fill="x", pady=(0, 12))
+        # Actions
+        r2 = Frame(pg, bg=t["bg"])
+        r2.grid(row=2, column=0, sticky="we", padx=12, pady=6)
+        self._btn(r2, accent=True, text="Start Transcription", command=self._start, font=("Segoe UI Bold", 10)).pack(side="left")
+        self._btn(r2, text="Stop", command=self._stop, state="disabled").pack(side="left", padx=(6, 0))
+        
+        pf = Frame(r2, bg=t["bg"])
+        pf.pack(side="right", fill="x", expand=True, padx=(16, 0))
         self.status_var = StringVar(value="Ready")
-        self.status_label = Label(status_frame, textvariable=self.status_var, font=("Segoe UI", 9))
-        self.status_label.pack(side="left")
-        self.time_left_var = StringVar(value="")
-        self.time_left_label = Label(status_frame, textvariable=self.time_left_var, font=("Segoe UI", 9))
-        self.time_left_label.pack(side="right")
+        Label(pf, textvariable=self.status_var, font=("Segoe UI", 9), bg=t["bg"], fg=t["text_sec"]).pack(anchor="w")
+        self.tl_var = StringVar(value="")
+        Label(pf, textvariable=self.tl_var, font=("Segoe UI", 9), bg=t["bg"], fg=t["accent"]).pack(anchor="e")
+        self.prog_var = IntVar(value=0)
+        s = ttk.Style()
+        s.theme_use("clam")
+        s.configure("B.Horizontal.TProgressbar", background=t["accent"], troughcolor=t["surface"],
+                    darkcolor=t["accent_p"], lightcolor=t["accent"], bordercolor=t["border"], thickness=8)
+        ttk.Progressbar(pf, variable=self.prog_var, maximum=100, style="B.Horizontal.TProgressbar").pack(fill="x", pady=(4, 0))
         
-        # Buttons
-        btn_frame = Frame(left)
-        btn_frame.pack(fill="x", pady=(0, 4))
+        Frame(pg, bg=t["border"], height=1).grid(row=3, column=0, sticky="we", padx=12, pady=6)
         
-        self.start_btn = Button(btn_frame, text="Start Transcription",
-                                command=self.start_transcription,
-                                font=("Segoe UI", 11, "bold"), relief="flat", pady=6, padx=20)
-        self.start_btn.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        
-        self.stop_btn = Button(btn_frame, text="Stop", command=self.stop_transcription,
-                               font=("Segoe UI", 10), relief="flat", state="disabled", pady=6, padx=12)
-        self.stop_btn.pack(side="left")
-        
-        # History list (compact, below buttons)
-        self._make_section(left, "History")
-        hist_top = Frame(left)
-        hist_top.pack(fill="x", pady=(0, 4))
-        
-        self.hist_search_var = StringVar()
-        self.hist_search_entry = Entry(hist_top, textvariable=self.hist_search_var,
-                                       font=("Segoe UI", 9), width=20)
-        self.hist_search_entry.pack(side="left", fill="x", expand=True)
-        self.hist_search_var.trace_add("write", lambda *a: self.filter_history())
-        
-        self.history_listbox = Listbox(left, font=("Consolas", 9), height=6, relief="flat",
-                                       activestyle="none", selectmode="single")
-        self.history_listbox.pack(fill="both", expand=True, pady=(0, 4))
-        self.history_listbox.bind("<<ListboxSelect>>", self.on_history_select)
-        
-        hist_btns = Frame(left)
-        hist_btns.pack(fill="x")
-        Button(hist_btns, text="Open Transcriptions", command=self.open_transcriptions_folder,
-               font=("Segoe UI", 8), relief="flat").pack(side="left", padx=(0, 4))
-        Button(hist_btns, text="Open Downloads", command=self.open_downloads_folder,
-               font=("Segoe UI", 8), relief="flat").pack(side="left")
-        
-        # -- Right column: tabs (Log / Result / Preview) --
-        right = Frame(content)
-        right.pack(side="right", fill="both", expand=True)
-        
-        # Search bar
-        search_frame = Frame(right)
-        search_frame.pack(fill="x", pady=(0, 4))
-        
-        self.search_var = StringVar()
-        self.search_entry = Entry(search_frame, textvariable=self.search_var,
-                                  font=("Segoe UI", 10), width=22)
-        self.search_entry.pack(side="left", padx=(0, 6))
-        self.search_entry.bind("<Return>", lambda e: self.search_in_result())
-        
-        self.search_btn = Button(search_frame, text="Find", command=self.search_in_result,
-                                 font=("Segoe UI", 9), relief="flat", padx=10)
-        self.search_btn.pack(side="left", padx=(0, 4))
-        
-        Button(search_frame, text="Clear", command=self.clear_search,
-               font=("Segoe UI", 9), relief="flat", padx=8).pack(side="left")
-        
-        self.search_status = StringVar(value="")
-        self.search_status_label = Label(search_frame, textvariable=self.search_status,
-                                         font=("Segoe UI", 8))
-        self.search_status_label.pack(side="left", padx=(12, 0))
-        
-        # Tabs
-        self.tabs = ttk.Notebook(right)
-        self.tabs.pack(fill="both", expand=True)
-        
-        # Log
-        log_frame = Frame(self.tabs)
-        self.tabs.add(log_frame, text="  Log  ")
-        self.log_text = Text(log_frame, font=("Consolas", 9), wrap="word",
-                             undo=False, insertwidth=0, highlightthickness=0, relief="flat")
-        log_scroll = Scrollbar(log_frame, command=self.log_text.yview)
-        self.log_text.config(yscrollcommand=log_scroll.set)
+        lb = self._card(pg)
+        lb.grid(row=4, column=0, sticky="nswe", padx=12, pady=(0, 12))
+        self._card_hdr(lb, "LOG")
+        li = Frame(lb, bg=t["surface"])
+        li.pack(fill="both", expand=True, padx=4, pady=4)
+        self.log_text = Text(li, font=("Consolas", 9), wrap="word", relief="flat", bg=t["surface"], fg=t["text"],
+                             insertbackground=t["text"], highlightthickness=0, undo=False, insertwidth=0,
+                             selectbackground=t["accent"], selectforeground="#ffffff")
         self.log_text.pack(side="left", fill="both", expand=True)
-        log_scroll.pack(side="right", fill="y")
         self.log_text.config(state="disabled")
-        self.log_text.tag_config("success", foreground="#a6e3a1")
-        self.log_text.tag_config("error", foreground="#f38ba8")
-        self.log_text.tag_config("info", foreground="#89b4fa")
+        self.log_text.tag_config("success", foreground=t["ok"])
+        self.log_text.tag_config("error", foreground=t["err"])
+        self.log_text.tag_config("info", foreground=t["accent"])
+        Scrollbar(li, command=self.log_text.yview).pack(side="right", fill="y")
+        self.log_text.config(yscrollcommand=self.log_text.master.winfo_children()[-1].set)
         
-        # Result
-        result_frame = Frame(self.tabs)
-        self.tabs.add(result_frame, text="  Result  ")
-        self.result_text = Text(result_frame, font=("Consolas", 10), wrap="word",
-                                undo=False, insertwidth=0, highlightthickness=0, relief="flat")
-        result_scroll = Scrollbar(result_frame, command=self.result_text.yview)
-        self.result_text.config(yscrollcommand=result_scroll.set)
-        self.result_text.pack(side="left", fill="both", expand=True)
-        result_scroll.pack(side="right", fill="y")
-        self.result_text.tag_config("highlight", background="#f9e2af", foreground="#1e1e2e")
-        self.result_text.bind("<Key>", lambda e: "break")
-        self.result_text.bind("<Control-a>", lambda e: self.result_text.tag_add("sel", "1.0", END) or "break")
-        
-        result_menu = Menu(self.result_text, tearoff=0)
-        result_menu.add_command(label="Copy Selected", command=self.copy_selected_result)
-        result_menu.add_command(label="Copy All", command=self.copy_result)
-        self.result_text.bind("<Button-3>", lambda e: result_menu.tk_popup(e.x_root, e.y_root))
-        
-        # Preview (History)
-        preview_frame = Frame(self.tabs)
-        self.tabs.add(preview_frame, text="  Preview  ")
-        self.history_preview = Text(preview_frame, font=("Consolas", 10), wrap="word",
-                                    undo=False, insertwidth=0, highlightthickness=0, relief="flat")
-        preview_scroll = Scrollbar(preview_frame, command=self.history_preview.yview)
-        self.history_preview.config(yscrollcommand=preview_scroll.set)
-        self.history_preview.pack(side="left", fill="both", expand=True)
-        preview_scroll.pack(side="right", fill="y")
-        self.history_preview.bind("<Key>", lambda e: "break")
-        self.history_preview.bind("<Control-a>", lambda e: self.history_preview.tag_add("sel", "1.0", END) or "break")
-        
-        prev_menu = Menu(self.history_preview, tearoff=0)
-        prev_menu.add_command(label="Copy Selected", command=self.copy_selected_history)
-        prev_menu.add_command(label="Copy All", command=self.copy_history_preview)
-        self.history_preview.bind("<Button-3>", lambda e: prev_menu.tk_popup(e.x_root, e.y_root))
-        
-        # Bind Ctrl+F
-        self.root.bind("<Control-f>", lambda e: self.focus_search())
-        self.root.bind("<Control-F>", lambda e: self.focus_search())
+        return pg
     
-    def _make_section(self, parent, title):
-        Label(parent, text=title, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(8, 4))
+    # ─── History Page ──────────────────────────────────────────
+    def _page_history(self):
+        t = self.T()
+        pg = Frame(self.content, bg=t["bg"])
+        pg.grid_columnconfigure(0, weight=2)
+        pg.grid_columnconfigure(1, weight=3)
+        pg.grid_rowconfigure(3, weight=1)
+        
+        # Header
+        hdr = Frame(pg, bg=t["bg"])
+        hdr.grid(row=0, column=0, columnspan=2, sticky="we", padx=12, pady=(12, 6))
+        Label(hdr, text="HISTORY", font=("Segoe UI Bold", 14), bg=t["bg"], fg=t["accent"]).pack(side="left")
+        self._btn(hdr, text="Downloads", command=self._open_downloads).pack(side="right", padx=(6, 0))
+        self._btn(hdr, text="Transcriptions", command=self._open_transcriptions).pack(side="right")
+        
+        # Files search
+        fs = Frame(pg, bg=t["bg"])
+        fs.grid(row=1, column=0, sticky="we", padx=(12, 4), pady=6)
+        fs.grid_columnconfigure(0, weight=1)
+        Label(fs, text="Search files:", font=("Segoe UI", 9), bg=t["bg"], fg=t["text_sec"]).pack(anchor="w")
+        self.hist_search_var = StringVar()
+        self.hist_search_entry = self._entry(fs, textvariable=self.hist_search_var)
+        self.hist_search_entry.pack(fill="x", ipady=3)
+        self.hist_search_entry.bind("<Control-v>", self._paste_hist_search)
+        self.hist_search_entry.bind("<Control-V>", self._paste_hist_search)
+        self.hist_search_var.trace_add("write", lambda *a: self._filter_hist())
+        
+        # Preview search
+        ps = Frame(pg, bg=t["bg"])
+        ps.grid(row=1, column=1, sticky="we", padx=(4, 12), pady=6)
+        ps.grid_columnconfigure(0, weight=1)
+        Label(ps, text="Search in preview:", font=("Segoe UI", 9), bg=t["bg"], fg=t["text_sec"]).pack(anchor="w")
+        search_row = Frame(ps, bg=t["bg"])
+        search_row.pack(fill="x")
+        search_row.grid_columnconfigure(0, weight=1)
+        self.preview_search_var = StringVar()
+        self.preview_search_entry = self._entry(search_row, textvariable=self.preview_search_var)
+        self.preview_search_entry.grid(row=0, column=0, sticky="we", ipady=3)
+        self.preview_search_entry.bind("<Return>", lambda e: self._search_preview())
+        self.preview_search_entry.bind("<Control-v>", self._paste_preview_search)
+        self.preview_search_entry.bind("<Control-V>", self._paste_preview_search)
+        self._btn(search_row, text="Find", command=self._search_preview, padx=8).grid(row=0, column=1, padx=(6, 0))
+        self._btn(search_row, text="Clear", command=self._clear_preview_search, padx=8).grid(row=0, column=2, padx=(4, 0))
+        self.preview_search_status = StringVar(value="")
+        Label(search_row, textvariable=self.preview_search_status, font=("Segoe UI", 8),
+              bg=t["bg"], fg=t["text_mut"]).grid(row=0, column=3, padx=(8, 0))
+        
+        # Files list
+        lb = self._card(pg)
+        lb.grid(row=2, column=0, sticky="nswe", padx=(12, 4), pady=(0, 12))
+        self._card_hdr(lb, "FILES")
+        li = Frame(lb, bg=t["surface"])
+        li.pack(fill="both", expand=True, padx=4, pady=4)
+        self.hist_list = Listbox(li, font=("Segoe UI", 10), relief="flat", bd=0, bg=t["surface"], fg=t["text"],
+                                 selectbackground=t["accent"], selectforeground="#ffffff", activestyle="none", highlightthickness=0)
+        self.hist_list.pack(side="left", fill="both", expand=True)
+        self.hist_list.bind("<<ListboxSelect>>", self._hist_select)
+        Scrollbar(li, command=self.hist_list.yview).pack(side="right", fill="y")
+        
+        # Preview
+        pb = self._card(pg)
+        pb.grid(row=2, column=1, sticky="nswe", padx=(4, 12), pady=(0, 12))
+        self._card_hdr(pb, "PREVIEW")
+        pi = Frame(pb, bg=t["surface"])
+        pi.pack(fill="both", expand=True, padx=4, pady=4)
+        self.hist_preview = Text(pi, font=("Consolas", 10), wrap="word", relief="flat", bg=t["surface"], fg=t["text"],
+                                 insertbackground=t["text"], highlightthickness=0, undo=False, insertwidth=0,
+                                 selectbackground=t["accent"], selectforeground="#ffffff")
+        self.hist_preview.tag_config("search_match", background=t["accent"], foreground="#ffffff")
+        self.hist_preview.pack(side="left", fill="both", expand=True)
+        self.hist_preview.bind("<Key>", lambda e: "break")
+        self.hist_preview.bind("<Control-a>", lambda e: self.hist_preview.tag_add("sel", "1.0", END) or "break")
+        self.hist_preview.bind("<Control-f>", lambda e: self.preview_search_entry.focus_set())
+        pm = Menu(self.hist_preview, tearoff=0, bg=t["surface"], fg=t["text"], activebackground=t["accent"], activeforeground="#ffffff")
+        pm.add_command(label="Copy Selected", command=self._copy_sel_hist)
+        pm.add_command(label="Copy All", command=self._copy_all_hist)
+        self.hist_preview.bind("<Button-3>", lambda e: pm.tk_popup(e.x_root, e.y_root))
+        Scrollbar(pi, command=self.hist_preview.yview).pack(side="right", fill="y")
+        
+        return pg
     
-    # === Theme ===
-    def toggle_theme(self):
-        self.theme = THEMES["light"] if self.theme_name.get() else THEMES["dark"]
-        self.apply_theme()
+    def _search_preview(self):
+        query = self.preview_search_var.get().strip()
+        if not query:
+            self.preview_search_status.set("")
+            return
+        
+        # If same query, find next match
+        if hasattr(self, '_last_search_query') and self._last_search_query == query and self._search_positions:
+            self._search_idx = (self._search_idx + 1) % len(self._search_positions)
+            pos = self._search_positions[self._search_idx]
+            self.hist_preview.see(pos)
+            self.preview_search_status.set(f"{self._search_idx + 1}/{len(self._search_positions)}")
+            return
+        
+        # New search — find all matches
+        self.hist_preview.tag_remove("search_match", "1.0", END)
+        self._last_search_query = query
+        self._search_positions = []
+        start = "1.0"
+        while True:
+            pos = self.hist_preview.search(query, start, stopindex=END, nocase=True)
+            if not pos:
+                break
+            end_pos = f"{pos}+{len(query)}c"
+            self.hist_preview.tag_add("search_match", pos, end_pos)
+            self._search_positions.append(pos)
+            start = end_pos
+        
+        count = len(self._search_positions)
+        self.preview_search_status.set(f"{count} found")
+        if count > 0:
+            self._search_idx = 0
+            self.hist_preview.see(self._search_positions[0])
     
-    def apply_theme(self):
-        t = self.theme
-        self.root.configure(bg=t["bg"])
-        self.main_frame.configure(bg=t["bg"])
-        self.top_bar.configure(bg=t["bg"])
-        
-        for w in self.top_bar.winfo_children():
-            if isinstance(w, Label):
-                w.configure(bg=t["bg"], fg=t["fg"])
-        
-        self.theme_frame.configure(bg=t["bg"])
-        self.theme_label.configure(bg=t["bg"], fg=t["muted"])
-        self.theme_label2.configure(bg=t["bg"], fg=t["muted"])
-        
-        # Style widgets
-        self.style.configure(".", background=t["bg"], foreground=t["fg"], fieldbackground=t["entry_bg"],
-                             borderwidth=0, troughcolor=t["surface"])
-        self.style.configure("TCheckbutton", background=t["bg"], foreground=t["fg"])
-        self.style.map("TCheckbutton", background=[("active", t["bg"])])
-        
-        # Switch style
-        self.style.configure("Switch.TCheckbutton", background=t["bg"], troughcolor=t["surface"],
-                             indicatorcolor=t["surface3"])
-        self.style.map("Switch.TCheckbutton",
-                       indicatorcolor=[("selected", t["accent"])])
-        
-        # Progress bar
-        self.style.configure("TProgressbar", background=t["accent"], troughcolor=t["surface"],
-                             borderwidth=0, lightcolor=t["accent"], darkcolor=t["accent"])
-        
-        # Notebook
-        self.style.configure("TNotebook", background=t["bg"], borderwidth=0)
-        self.style.configure("TNotebook.Tab", background=t["surface"], foreground=t["fg"],
-                             padding=[12, 6], font=("Segoe UI", 9))
-        self.style.map("TNotebook.Tab",
-                       background=[("selected", t["surface2"])],
-                       foreground=[("selected", t["accent"])])
-        
-        # Labels
-        for frame in [self.main_frame, self.top_bar]:
-            for w in frame.winfo_children():
-                try:
-                    if isinstance(w, Label):
-                        w.configure(bg=t["bg"], fg=t["fg"])
-                except:
-                    pass
-        
-        # Apply to all sub-frames recursively
-        self._apply_to_all(self.main_frame, t)
+    def _clear_preview_search(self):
+        self.preview_search_var.set("")
+        self.preview_search_status.set("")
+        self.hist_preview.tag_remove("search_match", "1.0", END)
+        self._search_positions = []
+        self._search_idx = 0
+        self._last_search_query = ""
+        self.hist_preview.tag_remove("search_match", "1.0", END)
     
-    def _apply_to_all(self, widget, t):
+    # ─── Settings Page ─────────────────────────────────────────
+    def _page_settings(self):
+        t = self.T()
+        pg = Frame(self.content, bg=t["bg"])
+        
+        hdr = Frame(pg, bg=t["bg"])
+        hdr.pack(fill="x", padx=12, pady=(12, 6))
+        Label(hdr, text="SETTINGS", font=("Segoe UI Bold", 14), bg=t["bg"], fg=t["accent"]).pack(side="left")
+        
+        c = self._card(pg)
+        c.pack(fill="x", padx=12, pady=6)
+        self._card_hdr(c, "APPEARANCE")
+        ci = Frame(c, bg=t["surface"])
+        ci.pack(fill="x", padx=8, pady=12)
+        Label(ci, text="Theme", font=("Segoe UI", 10), bg=t["surface"], fg=t["text"]).pack(side="left")
+        self._btn(ci, text="Light", command=lambda: self._set_theme("light")).pack(side="right", padx=(8, 0))
+        self._btn(ci, text="Dark", command=lambda: self._set_theme("dark")).pack(side="right")
+        
+        a = self._card(pg)
+        a.pack(fill="x", padx=12, pady=6)
+        self._card_hdr(a, "ABOUT")
+        ai = Frame(a, bg=t["surface"])
+        ai.pack(fill="x", padx=8, pady=8)
+        Label(ai, text="YouTube Transcriber v1.0", font=("Segoe UI", 10), bg=t["surface"], fg=t["text"]).pack(anchor="w")
+        Label(ai, text="github.com/viketvova/youtube-transcriber", font=("Segoe UI", 9), bg=t["surface"], fg=t["accent"]).pack(anchor="w", pady=(2, 0))
+        
+        return pg
+    
+    # ─── Theme ─────────────────────────────────────────────────
+    def _set_theme(self, theme):
+        self.theme = theme
+        self._save_theme()
+        self.build_ui()
+        self.refresh_history()
+    
+    # ─── Clipboard ─────────────────────────────────────────────
+    def _ctrl_v(self, e=None):
         try:
-            wtype = widget.winfo_class()
-            if wtype == "Frame":
-                widget.configure(bg=t["bg"])
-            elif wtype == "Label":
-                fg = t["fg"]
-                try:
-                    txt = widget.cget("text")
-                    if txt in ("Dark", "Light"):
-                        fg = t["muted"]
-                except:
-                    pass
-                widget.configure(bg=t["bg"], fg=fg)
-            elif wtype == "Entry":
-                widget.configure(bg=t["entry_bg"], fg=t["entry_fg"],
-                                 insertbackground=t["fg"], relief="flat")
-            elif wtype == "Button":
-                widget.configure(bg=t["surface2"], fg=t["fg"], activebackground=t["surface3"],
-                                 activeforeground=t["fg"], relief="flat")
-            elif wtype == "Text":
-                widget.configure(bg=t["surface"], fg=t["fg"], insertbackground=t["fg"],
-                                 selectbackground=t["accent"], selectforeground=t["btn_fg"],
-                                 relief="flat")
-            elif wtype == "Listbox":
-                widget.configure(bg=t["listbox_bg"], fg=t["listbox_fg"],
-                                 selectbackground=t["listbox_select"], selectforeground=t["fg"],
-                                 relief="flat", highlightbackground=t["border"])
-            elif wtype == "Menubutton":
-                widget.configure(bg=t["surface2"], fg=t["fg"], activebackground=t["surface3"],
-                                 activeforeground=t["fg"], relief="flat")
-        except:
-            pass
-        
-        for child in widget.winfo_children():
-            self._apply_to_all(child, t)
-    
-    # === Clipboard ===
-    def _on_ctrl_v(self, event=None):
-        try:
-            text = self.root.clipboard_get()
             self.url_entry.delete(0, END)
-            self.url_entry.insert(0, text.strip())
-        except:
-            pass
+            self.url_entry.insert(0, self.root.clipboard_get().strip())
+        except: pass
         return "break"
     
-    def paste_url(self):
+    def _paste_to_entry(self, entry):
         try:
-            self.url_var.set(self.root.clipboard_get().strip())
-        except:
-            pass
+            text = self.root.clipboard_get().strip()
+            entry.delete(0, END)
+            entry.insert(0, text)
+        except: pass
     
-    def copy_log(self):
-        self.log_text.config(state="normal")
-        text = self.log_text.get("1.0", END).strip()
-        self.log_text.config(state="disabled")
+    def _paste_preview_search(self, event=None):
+        try:
+            text = self.root.clipboard_get().strip()
+            self.preview_search_entry.delete(0, END)
+            self.preview_search_entry.insert(0, text)
+        except: pass
+        return "break"
+    
+    def _paste_hist_search(self, event=None):
+        try:
+            text = self.root.clipboard_get().strip()
+            self.hist_search_entry.delete(0, END)
+            self.hist_search_entry.insert(0, text)
+        except: pass
+        return "break"
+    
+    def _paste(self):
+        try: self.url_var.set(self.root.clipboard_get().strip())
+        except: pass
+    
+    def _copy_all_hist(self):
         self.root.clipboard_clear()
-        self.root.clipboard_append(text)
+        self.root.clipboard_append(self.hist_preview.get("1.0", END).strip())
     
-    def copy_result(self):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(self.result_text.get("1.0", END).strip())
-    
-    def copy_selected_result(self):
+    def _copy_sel_hist(self):
         try:
             self.root.clipboard_clear()
-            self.root.clipboard_append(self.result_text.get("sel.first", "sel.last"))
-        except:
-            pass
+            self.root.clipboard_append(self.hist_preview.get("sel.first", "sel.last"))
+        except: pass
     
-    def copy_history_preview(self):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(self.history_preview.get("1.0", END).strip())
-    
-    def copy_selected_history(self):
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(self.history_preview.get("sel.first", "sel.last"))
-        except:
-            pass
-    
-    # === Log ===
-    def log(self, message, tag=None):
+    # ─── Log ───────────────────────────────────────────────────
+    def log(self, msg, tag=None):
         self.log_text.config(state="normal")
-        if tag:
-            self.log_text.insert(END, message + "\n", tag)
-        else:
-            self.log_text.insert(END, message + "\n")
+        self.log_text.insert(END, msg + "\n", tag) if tag else self.log_text.insert(END, msg + "\n")
         self.log_text.see(END)
         self.log_text.config(state="disabled")
     
@@ -453,112 +577,59 @@ class TranscriberGUI:
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", END)
         self.log_text.config(state="disabled")
-        self.result_text.delete("1.0", END)
-        self.tabs.select(0)
     
-    def show_result(self, text):
-        self.result_text.delete("1.0", END)
-        self.result_text.insert("1.0", text)
-        self.tabs.select(1)
-    
-    # === Search ===
-    def focus_search(self):
-        self.tabs.select(1)
-        self.search_entry.focus_set()
-        self.search_entry.select_range(0, END)
-    
-    def search_in_result(self):
-        query = self.search_var.get().strip()
-        if not query:
-            return
-        self.result_text.tag_remove("highlight", "1.0", END)
-        count = 0
-        start = "1.0"
-        while True:
-            pos = self.result_text.search(query, start, stopindex=END, nocase=True)
-            if not pos:
-                break
-            self.result_text.tag_add("highlight", pos, f"{pos}+{len(query)}c")
-            count += 1
-            start = f"{pos}+{len(query)}c"
-        self.search_status.set(f"{count} found")
-        if count > 0:
-            first = self.result_text.search(query, "1.0", stopindex=END, nocase=True)
-            if first:
-                self.result_text.see(first)
-    
-    def clear_search(self):
-        self.search_var.set("")
-        self.search_status.set("")
-        self.result_text.tag_remove("highlight", "1.0", END)
-    
-    # === History ===
+    # ─── History ───────────────────────────────────────────────
     def refresh_history(self):
         self._all_history = []
-        self.history_listbox.delete(0, END)
+        self.hist_list.delete(0, END)
         if not os.path.isdir(self.transcriptions_dir):
             return
         for f in sorted(Path(self.transcriptions_dir).glob("*.txt"), key=os.path.getmtime, reverse=True):
             self._all_history.append((f.stem, str(f)))
-        self.filter_history()
+        self._filter_hist()
     
-    def filter_history(self):
-        query = self.hist_search_var.get().strip().lower()
-        self.history_listbox.delete(0, END)
+    def _filter_hist(self):
+        q = self.hist_search_var.get().strip().lower()
+        self.hist_list.delete(0, END)
         self._history_files = []
         for name, path in self._all_history:
-            if query and query not in name.lower():
-                continue
-            self.history_listbox.insert(END, name)
+            if q and q not in name.lower(): continue
+            self.hist_list.insert(END, name)
             self._history_files.append(path)
     
-    def on_history_select(self, event=None):
-        sel = self.history_listbox.curselection()
-        if not sel:
-            return
-        idx = sel[0]
-        if idx < len(self._history_files):
+    def _hist_select(self, e=None):
+        sel = self.hist_list.curselection()
+        if not sel: return
+        i = sel[0]
+        if i < len(self._history_files):
             try:
-                with open(self._history_files[idx], "r", encoding="utf-8") as f:
-                    content = f.read()
-                self.history_preview.delete("1.0", END)
-                self.history_preview.insert("1.0", content)
-                self.tabs.select(2)  # Switch to Preview tab
+                with open(self._history_files[i], "r", encoding="utf-8") as f: c = f.read()
+                self.hist_preview.delete("1.0", END)
+                self.hist_preview.insert("1.0", c)
             except Exception as e:
-                self.history_preview.delete("1.0", END)
-                self.history_preview.insert("1.0", f"Error: {e}")
+                self.hist_preview.delete("1.0", END)
+                self.hist_preview.insert("1.0", f"Error: {e}")
     
-    def open_transcriptions_folder(self):
-        os.startfile(self.transcriptions_dir)
-    
-    def open_downloads_folder(self):
+    def _open_transcriptions(self): os.startfile(self.transcriptions_dir)
+    def _open_downloads(self):
         d = os.path.join(os.path.dirname(__file__), "downloads")
         os.makedirs(d, exist_ok=True)
         os.startfile(d)
     
-    # === Progress ===
-    def set_progress(self, value, status=None, time_left=None):
-        self.progress_var.set(value)
-        if status:
-            self.status_var.set(status)
-        if time_left is not None:
-            self.time_left_var.set(time_left)
+    # ─── Progress ──────────────────────────────────────────────
+    def _set_progress(self, v, s=None, tl=None):
+        self.prog_var.set(v)
+        if s: self.status_var.set(s)
+        if tl is not None: self.tl_var.set(tl)
         self.root.update_idletasks()
     
-    def set_processing(self, state):
-        self.is_processing = state
-        self.start_btn.config(state="disabled" if state else "normal")
-        self.stop_btn.config(state="normal" if state else "disabled")
-    
-    def validate_url(self, url):
-        return bool(re.match(r'https?://(www\.)?(youtube\.com|youtu\.be)', url))
-    
-    def stop_transcription(self):
+    def validate_url(self, url): return bool(re.match(r'https?://(www\.)?(youtube\.com|youtu\.be)', url))
+    def _stop(self):
         self.is_processing = False
         self.log("Stopping...", "info")
     
-    # === Transcription ===
-    def start_transcription(self):
+    # ─── Transcription ─────────────────────────────────────────
+    def _start(self):
         url = self.url_var.get().strip()
         if not url:
             messagebox.showwarning("Warning", "Please enter a YouTube URL")
@@ -567,123 +638,106 @@ class TranscriberGUI:
             messagebox.showerror("Error", "Invalid YouTube URL")
             return
         self.clear_log()
-        self.set_progress(0, "Starting...", "")
-        self.set_processing(True)
+        self._set_progress(0, "Starting...", "")
+        self.is_processing = True
         self.start_time_epoch = time.time()
-        threading.Thread(target=self.run_transcription, args=(url,), daemon=True).start()
+        threading.Thread(target=self._run, args=(url,), daemon=True).start()
     
-    def update_time_left(self, progress):
-        if progress > 0:
-            elapsed = time.time() - self.start_time_epoch
-            remaining = elapsed / (progress / 100) - elapsed
-            if remaining > 0:
-                self.time_left_var.set(f"~{int(remaining//60)}m {int(remaining%60)}s left")
-            else:
-                self.time_left_var.set("")
+    def _update_tl(self, p):
+        if p > 0:
+            el = time.time() - self.start_time_epoch
+            rem = el / (p / 100) - el
+            self.tl_var.set(f"~{int(rem//60)}m {int(rem%60)}s left" if rem > 0 else "")
     
-    def run_transcription(self, url):
+    def _run(self, url):
         lang = self.lang_var.get()
         model = self.model_var.get()
         chunk = int(self.chunk_var.get())
-        start_sec = parse_time(self.start_var.get().strip()) if self.start_var.get().strip() else 0.0
-        end_sec = parse_time(self.end_var.get().strip()) if self.end_var.get().strip() else 0.0
+        ss = parse_time(self.start_var.get().strip()) if self.start_var.get().strip() else 0.0
+        es = parse_time(self.end_var.get().strip()) if self.end_var.get().strip() else 0.0
         
-        lang_names = {"ru": "Russian", "en": "English", "uk": "Ukrainian"}
+        ln = {"ru": "Russian", "en": "English", "uk": "Ukrainian"}
         self.log(f"URL: {url}", "info")
-        self.log(f"Language: {lang_names.get(lang, lang)} | Model: {model} | Chunk: {chunk}min", "info")
-        if start_sec > 0 or end_sec > 0:
-            self.log(f"Time: {format_timestamp(start_sec)} - {format_timestamp(end_sec) if end_sec > 0 else 'end'}", "info")
-        self.log("-" * 50)
+        self.log(f"Language: {ln.get(lang, lang)} | Model: {model} | Chunk: {chunk}min", "info")
+        if ss > 0 or es > 0:
+            self.log(f"Time: {format_timestamp(ss)} - {format_timestamp(es) if es > 0 else 'end'}", "info")
+        self.log("-" * 60)
         
-        downloads_dir = os.path.join(os.path.dirname(__file__), "downloads")
-        os.makedirs(downloads_dir, exist_ok=True)
-        temp_dir = tempfile.mkdtemp(prefix="yt_", dir=downloads_dir)
+        dl = os.path.join(os.path.dirname(__file__), "downloads")
+        os.makedirs(dl, exist_ok=True)
+        td = tempfile.mkdtemp(prefix="yt_", dir=dl)
         
         try:
-            self.set_progress(5, "Downloading...", "")
+            self._set_progress(5, "Downloading...", "")
             self.log("[1/3] Downloading video...")
-            try:
-                video_path = download_video(url, temp_dir)
+            try: vp = download_video(url, td)
             except Exception as e:
-                self.log(f"Download error: {e}", "error")
-                return
-            if not video_path:
-                self.log("Download failed", "error")
-                return
-            if not self.is_processing:
-                return
+                self.log(f"Download error: {e}", "error"); return
+            if not vp:
+                self.log("Download failed", "error"); return
+            if not self.is_processing: return
             
-            self.set_progress(35, "Preparing audio...", "")
+            self._set_progress(35, "Preparing audio...", "")
             self.log("[2/3] Preparing audio...")
-            audio_path = prepare_audio(video_path, temp_dir, start_sec, end_sec)
-            if not audio_path:
-                self.log("Audio preparation failed", "error")
-                return
-            if not self.is_processing:
-                return
+            ap = prepare_audio(vp, td, ss, es)
+            if not ap:
+                self.log("Audio preparation failed", "error"); return
+            if not self.is_processing: return
             
-            self.set_progress(45, "Loading model...", "")
+            self._set_progress(45, "Loading model...", "")
             self.log(f"[3/3] Transcribing ({model})...")
             
-            def progress_callback(done, _):
-                self.set_progress(min(45 + int(done * 0.5), 95), f"Segments: {done}", "")
-                self.update_time_left(min(45 + int(done * 0.5), 95))
+            def pcb(d, _):
+                p = min(45 + int(d * 0.5), 95)
+                self._set_progress(p, f"Segments: {d}", "")
+                self._update_tl(p)
             
-            segments = transcribe_audio(audio_path, model_size=model, language=lang,
-                                        time_offset=start_sec, progress_callback=progress_callback)
-            if not segments:
-                self.log("Transcription failed", "error")
-                return
+            segs = transcribe_audio(ap, model_size=model, language=lang, time_offset=ss, progress_callback=pcb)
+            if not segs:
+                self.log("Transcription failed", "error"); return
             
-            self.set_progress(98, "Saving...", "")
-            output_text = format_output(segments, url, chunk)
+            self._set_progress(98, "Saving...", "")
+            txt = format_output(segs, url, chunk)
             
-            # Get title
             try:
                 import subprocess, json
                 r = subprocess.run([sys.executable, "-m", "yt_dlp", "--dump-json", "--skip-download", url],
                                    capture_output=True, text=True, timeout=30)
                 title = json.loads(r.stdout).get("title", "") if r.returncode == 0 else ""
-            except:
-                title = ""
+            except: title = ""
             
+            vid_match = re.search(r'(?:v=|youtu\.be/)([^&?]+)', url)
             if title:
-                safe = re.sub(r'[<>:"/\\|?*]', '_', title)[:80]
-                filename = f"{safe}.txt"
+                fn = re.sub(r'[<>:"/\\|?*]', '_', title)[:80] + ".txt"
+            elif vid_match:
+                fn = f"transcript_{vid_match.group(1)[:11]}.txt"
             else:
-                vid = re.search(r'(?:v=|youtu\.be/)([^&?]+)', url)
-                filename = f"transcript_{vid.group(1)[:11]}.txt" if vid else "transcript.txt"
+                fn = "transcript.txt"
             
-            output_path = os.path.join(self.transcriptions_dir, filename)
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write(output_text)
+            op = os.path.join(self.transcriptions_dir, fn)
+            with open(op, "w", encoding="utf-8") as f: f.write(txt)
             
-            elapsed = time.time() - self.start_time_epoch
-            self.set_progress(100, "Done!", f"{int(elapsed//60)}m {int(elapsed%60)}s")
-            self.log("-" * 50)
-            self.log(f"Saved: {filename}", "success")
-            self.log(f"Segments: {len(segments)} | Time: {int(elapsed//60)}m {int(elapsed%60)}s", "success")
-            
-            self.show_result(output_text)
+            el = time.time() - self.start_time_epoch
+            self._set_progress(100, "Done!", f"{int(el//60)}m {int(el%60)}s")
+            self.log("-" * 60)
+            self.log(f"Saved: {fn}", "success")
+            self.log(f"Segments: {len(segs)} | Time: {int(el//60)}m {int(el%60)}s", "success")
             self.refresh_history()
         except Exception as e:
             self.log(f"Error: {e}", "error")
-            self.set_progress(0, "Error", "")
+            self._set_progress(0, "Error", "")
         finally:
-            self.set_processing(False)
+            self.is_processing = False
     
-    def run(self):
-        self.root.mainloop()
+    def run(self): self.root.mainloop()
 
 
 if __name__ == "__main__":
     try:
-        app = TranscriberGUI()
-        app.run()
+        TranscriberGUI().run()
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
         print(tb)
-        with open(os.path.join(os.path.dirname(__file__), "error.log"), "w") as f:
-            f.write(tb)
-        input("Press Enter to exit...")
+        with open(os.path.join(os.path.dirname(__file__), "error.log"), "w") as f: f.write(tb)
+        input("Press Enter...")
