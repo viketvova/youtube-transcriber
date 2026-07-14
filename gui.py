@@ -286,8 +286,9 @@ class TranscriberGUI:
         self.url_text.pack(fill="both", expand=True, padx=2, pady=2)
         
         self._btn(r0, text="Paste", command=self._paste, width=7).grid(row=0, column=2, padx=(6, 0), sticky="ne")
-        Label(r0, text="One URL per line", font=("Segoe UI", 8),
-              bg=t["bg"], fg=t["text_mut"]).grid(row=1, column=1, sticky="w", pady=(2, 0))
+        self._btn(r0, text="Select File", command=self._select_file, width=10).grid(row=0, column=3, padx=(6, 0), sticky="ne")
+        Label(r0, text="One URL per line, or select audio/video file", font=("Segoe UI", 8),
+              bg=t["bg"], fg=t["text_mut"]).grid(row=1, column=1, columnspan=3, sticky="w", pady=(2, 0))
         
         # Time + Settings
         r1 = Frame(pg, bg=t["bg"])
@@ -726,6 +727,26 @@ class TranscriberGUI:
             self.url_text.insert("insert", text)
         except: pass
     
+    def _select_file(self):
+        """Open file dialog to select audio/video file."""
+        from tkinter import filedialog
+        filetypes = [
+            ("Audio/Video files", "*.mp3 *.mp4 *.m4a *.ogg *.wav *.flac *.webm *.avi *.mkv *.mov *.wmv *.aac *.opus"),
+            ("Audio files", "*.mp3 *.m4a *.ogg *.wav *.flac *.aac *.opus"),
+            ("Video files", "*.mp4 *.webm *.avi *.mkv *.mov *.wmv"),
+            ("All files", "*.*")
+        ]
+        files = filedialog.askopenfilenames(title="Select audio/video files", filetypes=filetypes)
+        if files:
+            # Insert file paths into URL text (one per line)
+            current = self.url_text.get("1.0", END).strip()
+            new_text = "\n".join(files)
+            if current:
+                self.url_text.delete("1.0", END)
+                self.url_text.insert("1.0", current + "\n" + new_text)
+            else:
+                self.url_text.insert("1.0", new_text)
+    
     def _copy_log(self):
         """Copy log content to clipboard."""
         self.log_text.config(state="normal")
@@ -886,52 +907,139 @@ class TranscriberGUI:
     
     # ─── Transcription ─────────────────────────────────────────
     def _start(self):
-        url_input = self.url_text.get("1.0", END).strip()
-        if not url_input:
-            messagebox.showwarning("Warning", "Please enter a YouTube URL")
+        input_text = self.url_text.get("1.0", END).strip()
+        if not input_text:
+            messagebox.showwarning("Warning", "Please enter a YouTube URL or select a file")
             return
         
-        # Parse multiple URLs (newline separated)
-        urls = [self.clean_url(u.strip()) for u in url_input.split("\n") if u.strip()]
+        # Parse input (newline separated)
+        items = [item.strip() for item in input_text.split("\n") if item.strip()]
         
-        # Validate all URLs
-        for url in urls:
-            if not self.validate_url(url):
-                messagebox.showerror("Error", f"Invalid YouTube URL:\n{url}")
+        # Separate URLs and local files
+        urls = []
+        files = []
+        for item in items:
+            if os.path.isfile(item):
+                files.append(item)
+            elif self.validate_url(item):
+                urls.append(self.clean_url(item))
+            else:
+                messagebox.showerror("Error", f"Invalid input:\n{item}\n\nMust be a YouTube URL or existing file path.")
                 return
+        
+        all_items = files + urls
+        if not all_items:
+            return
         
         self.clear_log()
         self._set_progress(0, "Starting...", "")
         self.is_processing = True
         self.start_time_epoch = time.time()
         
-        if len(urls) == 1:
-            threading.Thread(target=self._run, args=(urls[0],), daemon=True).start()
+        if len(all_items) == 1:
+            if files:
+                threading.Thread(target=self._run_local, args=(files[0],), daemon=True).start()
+            else:
+                threading.Thread(target=self._run, args=(urls[0],), daemon=True).start()
         else:
-            self.log(f"Batch mode: {len(urls)} videos to process", "info")
-            threading.Thread(target=self._run_batch, args=(urls,), daemon=True).start()
+            self.log(f"Batch mode: {len(all_items)} items to process ({len(files)} files, {len(urls)} URLs)", "info")
+            threading.Thread(target=self._run_batch, args=(all_items,), daemon=True).start()
     
-    def _run_batch(self, urls):
-        total = len(urls)
+    def _run_batch(self, items):
+        total = len(items)
         completed = 0
-        for i, url in enumerate(urls, 1):
+        for i, item in enumerate(items, 1):
             if not self.is_processing:
                 break
             self.log(f"\n{'='*60}", "info")
-            self.log(f"[{i}/{total}] Processing: {url}", "info")
+            self.log(f"[{i}/{total}] Processing: {item}", "info")
             self.log(f"{'='*60}", "info")
-            self._run(url, batch=True)
+            if os.path.isfile(item):
+                self._run_local(item, batch=True)
+            else:
+                self._run(item, batch=True)
             if self.is_processing:
                 completed += 1
         self.is_processing = False
         self.root.title("YouTube Transcriber")
-        self.log(f"\nBatch complete: {completed}/{total} videos processed", "success")
+        self.log(f"\nBatch complete: {completed}/{total} items processed", "success")
     
     def _update_tl(self, p):
         if p > 0:
             el = time.time() - self.start_time_epoch
             rem = el / (p / 100) - el
             self.tl_var.set(f"~{int(rem//60)}m {int(rem%60)}s left" if rem > 0 else "")
+    
+    def _run_local(self, filepath, batch=False):
+        """Transcribe a local audio/video file."""
+        lang = self.lang_var.get()
+        model = self.model_var.get()
+        chunk = int(self.chunk_var.get())
+        ss = parse_time(self.start_var.get().strip()) if self.start_var.get().strip() else 0.0
+        es = parse_time(self.end_var.get().strip()) if self.end_var.get().strip() else 0.0
+        
+        ln = {"auto": "Auto-detect", "ru": "Russian", "en": "English", "uk": "Ukrainian"}
+        filename = os.path.basename(filepath)
+        self.log(f"File: {filename}", "info")
+        self.log(f"Language: {ln.get(lang, lang)} | Model: {model} | Chunk: {chunk}min", "info")
+        if ss > 0 or es > 0:
+            self.log(f"Time: {format_timestamp(ss)} - {format_timestamp(es) if es > 0 else 'end'}", "info")
+        self.log("-" * 60)
+        
+        if not os.path.exists(filepath):
+            self.log(f"File not found: {filepath}", "error")
+            return
+        
+        dl = os.path.join(os.path.dirname(__file__), "downloads")
+        os.makedirs(dl, exist_ok=True)
+        td = tempfile.mkdtemp(prefix="local_", dir=dl)
+        
+        try:
+            self.set_progress(20, "Preparing audio...", "")
+            self.log("[1/2] Preparing audio...")
+            ap = prepare_audio(filepath, td, ss, es)
+            if not ap:
+                self.log("Audio preparation failed", "error")
+                return
+            if not self.is_processing:
+                return
+            
+            self.set_progress(50, "Loading model...", "")
+            self.log(f"[2/2] Transcribing ({model})...")
+            
+            def pcb(d, _):
+                p = min(50 + int(d * 0.45), 95)
+                self.set_progress(p, f"Segments: {d}", "")
+                self.update_time_left(p)
+            
+            segs = transcribe_audio(ap, model_size=model, language=lang, time_offset=ss, progress_callback=pcb)
+            if not segs:
+                self.log("Transcription failed", "error")
+                return
+            
+            self.set_progress(98, "Saving...", "")
+            txt = format_output(segs, f"file://{filepath}", chunk, lang)
+            
+            safe_name = re.sub(r'[<>:"/\\|?*]', '_', os.path.splitext(filename)[0])[:80]
+            fn = f"{safe_name}.txt"
+            op = os.path.join(self.transcriptions_dir, fn)
+            with open(op, "w", encoding="utf-8") as f:
+                f.write(txt)
+            
+            el = time.time() - self.start_time_epoch
+            self.set_progress(100, "Done!", f"{int(el//60)}m {int(el%60)}s")
+            self.log("-" * 60)
+            self.log(f"Saved: {fn}", "success")
+            self.log(f"Segments: {len(segs)} | Time: {int(el//60)}m {int(el%60)}s", "success")
+            self.refresh_history()
+        except Exception as e:
+            self.log(f"Error: {e}", "error")
+            self.set_progress(0, "Error", "")
+        finally:
+            try:
+                shutil.rmtree(td, ignore_errors=True)
+            except:
+                pass
     
     def _run(self, url, batch=False):
         lang = self.lang_var.get()
