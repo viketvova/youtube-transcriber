@@ -14,14 +14,19 @@ Requirements:
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Optional
+
+# Hide console window for subprocess calls on Windows
+CREATE_NO_WINDOW = 0x08000000
 
 try:
     from faster_whisper import WhisperModel
@@ -73,9 +78,6 @@ def download_video(url: str, output_dir: str) -> Optional[str]:
     """
     print("\n[1/3] Downloading video...")
     
-    import subprocess
-    import shutil
-    
     output_template = os.path.join(output_dir, "video.%(ext)s")
     
     # Find yt-dlp executable
@@ -112,7 +114,7 @@ def download_video(url: str, output_dir: str) -> Optional[str]:
     try:
         # First get video info
         info_cmd = cmd + ["--dump-json", "--skip-download"]
-        result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=60, creationflags=CREATE_NO_WINDOW)
         
         if result.returncode != 0:
             error_msg = result.stderr.strip()
@@ -125,7 +127,6 @@ def download_video(url: str, output_dir: str) -> Optional[str]:
             else:
                 raise Exception(f"Cannot get video info: {error_msg[:200]}")
         
-        import json
         info = json.loads(result.stdout)
         title = info.get("title", "Unknown")
         duration = info.get("duration", 0)
@@ -134,7 +135,7 @@ def download_video(url: str, output_dir: str) -> Optional[str]:
         
         # Download
         dl_cmd = [c for c in cmd if c not in ("--dump-json", "--skip-download")]
-        result = subprocess.run(dl_cmd, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(dl_cmd, capture_output=True, text=True, timeout=600, creationflags=CREATE_NO_WINDOW)
         
         if result.returncode != 0:
             error_msg = result.stderr.strip()
@@ -210,12 +211,12 @@ def prepare_audio(
     ])
     
     try:
-        import subprocess
         result = subprocess.run(
             ffmpeg_cmd,
             capture_output=True,
             text=True,
-            check=True
+            check=True,
+            creationflags=CREATE_NO_WINDOW
         )
         print("  Audio converted to 16kHz mono WAV")
         return audio_path
@@ -320,7 +321,8 @@ def transcribe_audio(
 def format_output(
     segments: list,
     video_url: str,
-    chunk_minutes: int = 5
+    chunk_minutes: int = 5,
+    language: str = "auto"
 ) -> str:
     """
     Format transcription segments into text with time markers.
@@ -329,15 +331,17 @@ def format_output(
         segments: List of (start, end, text) tuples
         video_url: Original video URL
         chunk_minutes: Minutes per output chunk
+        language: Language code used for transcription
         
     Returns:
         Formatted text string
     """
+    ln_names = {"auto": "Auto-detected", "ru": "Russian", "en": "English", "uk": "Ukrainian"}
     lines = []
     lines.append("=" * 60)
     lines.append("TRANSCRIPTION")
     lines.append(f"Source: {video_url}")
-    lines.append(f"Language: Russian")
+    lines.append(f"Language: {ln_names.get(language, language)}")
     lines.append(f"Segments: {len(segments)}")
     lines.append("=" * 60)
     lines.append("")
@@ -495,7 +499,7 @@ Examples:
         
         # Step 4: Format and save output
         print("\nFormatting output...")
-        output_text = format_output(segments, args.url, args.chunk)
+        output_text = format_output(segments, args.url, args.chunk, args.language)
         
         # Determine output path
         if args.output:

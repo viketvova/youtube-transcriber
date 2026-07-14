@@ -95,6 +95,20 @@ class TranscriberGUI:
         
         self.root.configure(bg=t["bg"])
         
+        # Global Ctrl+V via keyboard library
+        import keyboard as kb
+        def on_ctrl_v():
+            try:
+                widget = self.root.focus_get()
+                if isinstance(widget, Text) and widget != self.log_text:
+                    import pyperclip
+                    text = pyperclip.paste()
+                    if text:
+                        widget.insert("insert", text)
+            except:
+                pass
+        kb.add_hotkey("ctrl+v", on_ctrl_v, suppress=False)
+        
         # Minimize to tray
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.bind("<Unmap>", self._on_minimize)
@@ -136,6 +150,9 @@ class TranscriberGUI:
                           fg=t["accent"] if p == pid else t["text_sec"])
         for p, pg in self.pages.items():
             pg.grid_forget() if p != pid else pg.grid(row=0, column=0, sticky="nswe")
+        # Refresh history when switching to History tab
+        if pid == "history":
+            self.refresh_history()
     
     def _entry(self, parent, **kw):
         t = self.T()
@@ -171,36 +188,6 @@ class TranscriberGUI:
         h.pack(fill="x")
         Label(h, text=f"  {title}", font=("Segoe UI Bold", 9),
               bg=t["surface_lighter"], fg=t["text_sec"]).pack(side="left", padx=4, pady=4)
-    
-    def _time_validate(self, var):
-        """Auto-format time input: adds colons, keeps cursor position."""
-        def handler(*args):
-            val = var.get()
-            # Remove non-digits
-            digits = "".join(c for c in val if c.isdigit())[:6]
-            # Format as XX:XX:XX
-            parts = []
-            for i in range(0, len(digits), 2):
-                parts.append(digits[i:i+2])
-            formatted = ":".join(parts)
-            if val != formatted:
-                # Save cursor position relative to digits
-                pos = var._last_pos if hasattr(var, '_last_pos') else len(digits)
-                var.set(formatted)
-                # Restore cursor: count how many real chars before cursor
-                new_pos = min(pos, len(digits))
-                # Convert digit index to string index (skip colons)
-                str_pos = 0
-                d_count = 0
-                for ch in formatted:
-                    if ch == ":":
-                        str_pos += 1
-                    else:
-                        if d_count >= new_pos:
-                            break
-                        d_count += 1
-                        str_pos += 1
-        return handler
     
     def _time_key(self, var, entry):
         """Handle keypress for time input."""
@@ -289,14 +276,17 @@ class TranscriberGUI:
         r0 = Frame(pg, bg=t["bg"])
         r0.grid(row=0, column=0, sticky="we", padx=12, pady=(12, 6))
         r0.grid_columnconfigure(1, weight=1)
-        Label(r0, text="URL(s)", font=("Segoe UI Bold", 10), bg=t["bg"], fg=t["text"], width=6, anchor="w").grid(row=0, column=0, padx=(0, 8))
-        self.url_var = StringVar()
-        self.url_entry = self._entry(r0, textvariable=self.url_var)
-        self.url_entry.grid(row=0, column=1, sticky="we", ipady=4)
-        self.url_entry.bind("<Control-v>", self._ctrl_v)
-        self.url_entry.bind("<Control-V>", self._ctrl_v)
-        self._btn(r0, text="Paste", command=self._paste, width=7).grid(row=0, column=2, padx=(6, 0))
-        Label(r0, text="Separate multiple URLs with comma", font=("Segoe UI", 8),
+        Label(r0, text="URL(s)", font=("Segoe UI Bold", 10), bg=t["bg"], fg=t["text"], width=6, anchor="nw").grid(row=0, column=0, padx=(0, 8), pady=(4, 0))
+        
+        url_frame = Frame(r0, bg=t["inp"], highlightthickness=1, highlightbackground=t["inp_b"])
+        url_frame.grid(row=0, column=1, sticky="we")
+        self.url_text = Text(url_frame, font=("Segoe UI", 10), bg=t["inp"], fg=t["text"],
+                             insertbackground=t["accent"], insertwidth=2, relief="flat",
+                             highlightthickness=0, height=3, undo=True, wrap="word")
+        self.url_text.pack(fill="both", expand=True, padx=2, pady=2)
+        
+        self._btn(r0, text="Paste", command=self._paste, width=7).grid(row=0, column=2, padx=(6, 0), sticky="ne")
+        Label(r0, text="One URL per line", font=("Segoe UI", 8),
               bg=t["bg"], fg=t["text_mut"]).grid(row=1, column=1, sticky="w", pady=(2, 0))
         
         # Time + Settings
@@ -344,6 +334,7 @@ class TranscriberGUI:
         r2.grid(row=2, column=0, sticky="we", padx=12, pady=6)
         self._btn(r2, accent=True, text="Start Transcription", command=self._start, font=("Segoe UI Bold", 10)).pack(side="left")
         self._btn(r2, text="Stop", command=self._stop, state="disabled").pack(side="left", padx=(6, 0))
+        self._btn(r2, text="Copy Log", command=self._copy_log, padx=8).pack(side="left", padx=(6, 0))
         
         pf = Frame(r2, bg=t["bg"])
         pf.pack(side="right", fill="x", expand=True, padx=(16, 0))
@@ -700,8 +691,8 @@ class TranscriberGUI:
     # ─── Clipboard ─────────────────────────────────────────────
     def _ctrl_v(self, e=None):
         try:
-            self.url_entry.delete(0, END)
-            self.url_entry.insert(0, self.root.clipboard_get().strip())
+            self.url_text.delete("1.0", END)
+            self.url_text.insert("1.0", self.root.clipboard_get().strip())
         except: pass
         return "break"
     
@@ -729,15 +720,79 @@ class TranscriberGUI:
         return "break"
     
     def _paste(self):
-        try: self.url_var.set(self.root.clipboard_get().strip())
+        """Paste from clipboard to URL text."""
+        try:
+            text = self.root.clipboard_get()
+            self.url_text.insert("insert", text)
         except: pass
     
+    def _copy_log(self):
+        """Copy log content to clipboard."""
+        self.log_text.config(state="normal")
+        text = self.log_text.get("1.0", END).strip()
+        self.log_text.config(state="disabled")
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.status_var.set("Log copied!")
+    
     def _on_close(self):
+        self._remove_tray()
         self.root.destroy()
     
     def _on_minimize(self, event=None):
         if self.root.state() == "iconic":
-            self.root.after(100, lambda: self.root.state("iconic"))
+            self.root.after(100, self._hide_to_tray)
+    
+    def _hide_to_tray(self):
+        """Minimize window to system tray."""
+        try:
+            import pystray
+            from PIL import Image, ImageDraw
+            
+            # Create tray icon
+            def create_icon():
+                img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
+                draw.rectangle([8, 8, 56, 56], fill="#e87d0d")
+                draw.text((16, 16), "YT", fill="white")
+                return img
+            
+            def on_show(icon, item):
+                icon.stop()
+                self.root.after(0, self._show_from_tray)
+            
+            def on_quit(icon, item):
+                icon.stop()
+                self.root.after(0, self._on_close)
+            
+            self._tray_icon = pystray.Icon(
+                "YouTube Transcriber",
+                create_icon(),
+                "YouTube Transcriber",
+                menu=pystray.Menu(
+                    pystray.MenuItem("Show", on_show),
+                    pystray.MenuItem("Quit", on_quit)
+                )
+            )
+            
+            self.root.withdraw()
+            threading.Thread(target=self._tray_icon.run, daemon=True).start()
+        except ImportError:
+            self.root.iconify()
+    
+    def _show_from_tray(self):
+        """Restore window from tray."""
+        if hasattr(self, '_tray_icon'):
+            self._tray_icon.stop()
+        self.root.deiconify()
+        self.root.state("normal")
+    
+    def _remove_tray(self):
+        if hasattr(self, '_tray_icon'):
+            try:
+                self._tray_icon.stop()
+            except:
+                pass
     
     def _copy_all_hist(self):
         self.root.clipboard_clear()
@@ -785,8 +840,13 @@ class TranscriberGUI:
         if not sel: return
         i = sel[0]
         if i < len(self._history_files):
+            filepath = self._history_files[i]
+            if not os.path.exists(filepath):
+                self.hist_preview.delete("1.0", END)
+                self.hist_preview.insert("1.0", "File not found — it may have been deleted.")
+                return
             try:
-                with open(self._history_files[i], "r", encoding="utf-8") as f: c = f.read()
+                with open(filepath, "r", encoding="utf-8") as f: c = f.read()
                 self.hist_preview.delete("1.0", END)
                 self.hist_preview.insert("1.0", c)
             except Exception as e:
@@ -814,19 +874,25 @@ class TranscriberGUI:
         self.root.update_idletasks()
     
     def validate_url(self, url): return bool(re.match(r'https?://(www\.)?(youtube\.com|youtu\.be)', url))
+    
+    def clean_url(self, url):
+        """Remove tracking parameters from YouTube URL."""
+        url = url.split("?")[0] if "?" in url else url
+        return url.rstrip("/")
+    
     def _stop(self):
         self.is_processing = False
         self.log("Stopping...", "info")
     
     # ─── Transcription ─────────────────────────────────────────
     def _start(self):
-        url_input = self.url_var.get().strip()
+        url_input = self.url_text.get("1.0", END).strip()
         if not url_input:
             messagebox.showwarning("Warning", "Please enter a YouTube URL")
             return
         
-        # Parse multiple URLs (comma or newline separated)
-        urls = [u.strip() for u in url_input.replace("\n", ",").split(",") if u.strip()]
+        # Parse multiple URLs (newline separated)
+        urls = [self.clean_url(u.strip()) for u in url_input.split("\n") if u.strip()]
         
         # Validate all URLs
         for url in urls:
@@ -847,6 +913,7 @@ class TranscriberGUI:
     
     def _run_batch(self, urls):
         total = len(urls)
+        completed = 0
         for i, url in enumerate(urls, 1):
             if not self.is_processing:
                 break
@@ -854,10 +921,11 @@ class TranscriberGUI:
             self.log(f"[{i}/{total}] Processing: {url}", "info")
             self.log(f"{'='*60}", "info")
             self._run(url, batch=True)
+            if self.is_processing:
+                completed += 1
         self.is_processing = False
         self.root.title("YouTube Transcriber")
-        if self.is_processing == False:
-            self.log(f"\nBatch complete: {total} videos processed", "success")
+        self.log(f"\nBatch complete: {completed}/{total} videos processed", "success")
     
     def _update_tl(self, p):
         if p > 0:
@@ -913,12 +981,13 @@ class TranscriberGUI:
                 self.log("Transcription failed", "error"); return
             
             self._set_progress(98, "Saving...", "")
-            txt = format_output(segs, url, chunk)
+            txt = format_output(segs, url, chunk, lang)
             
             try:
                 import subprocess, json
+                CREATE_NO_WINDOW = 0x08000000
                 r = subprocess.run([sys.executable, "-m", "yt_dlp", "--dump-json", "--skip-download", url],
-                                   capture_output=True, text=True, timeout=30)
+                                   capture_output=True, text=True, timeout=30, creationflags=CREATE_NO_WINDOW)
                 title = json.loads(r.stdout).get("title", "") if r.returncode == 0 else ""
             except: title = ""
             
@@ -943,7 +1012,11 @@ class TranscriberGUI:
             self.log(f"Error: {e}", "error")
             self._set_progress(0, "Error", "")
         finally:
-            self.is_processing = False
+            # Cleanup temp files
+            try:
+                shutil.rmtree(td, ignore_errors=True)
+            except:
+                pass
     
     def run(self): self.root.mainloop()
 
